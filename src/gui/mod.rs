@@ -8,6 +8,7 @@ use eframe::egui;
 pub mod tool_palette;
 pub mod floating_panels;
 pub mod generators_dialogs;
+pub mod ui_layout;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActiveTool {
@@ -507,19 +508,23 @@ pub struct LaserBurnApp {
     pub detach_tools_window: bool,
     pub open_flyout: Option<tool_palette::ToolCategory>,
     pub last_flyout_anchor: Option<egui::Rect>,
+
+    // Persistent UI Layout & Windows State
+    pub ui_layout: ui_layout::UiLayoutSettings,
 }
 
 #[cfg(feature = "gui")]
 impl Default for LaserBurnApp {
     fn default() -> Self {
         let (file_dialog_tx, file_dialog_rx) = std::sync::mpsc::channel();
+        let ui_layout = ui_layout::UiLayoutSettings::load_or_default();
         let mut app = Self {
             doc: Document::new("PhotonCAM_Project", 400.0, 400.0),
             active_tool: ActiveTool::Select,
             selected_shape_indices: Vec::new(),
             selected_layer: 0,
-            zoom: 1.6,
-            pan: egui::Vec2::new(120.0, 80.0),
+            zoom: ui_layout.zoom,
+            pan: egui::Vec2::new(ui_layout.pan_x, ui_layout.pan_y),
 
             drag_handle: DragHandle::None,
             drag_start_doc: None,
@@ -539,23 +544,23 @@ impl Default for LaserBurnApp {
             dragging_node_index: None,
 
             device: crate::device::DeviceManager::new(),
-            jog_step: 10.0,
-            jog_speed: 3000.0,
+            jog_step: ui_layout.jog_step,
+            jog_speed: ui_layout.jog_speed,
             command_input: "".to_string(),
             available_ports: Vec::new(),
 
-            show_properties_window: true,
-            show_objects_window: false,
-            show_job_window: false,
-            show_connection_window: false,
-            show_settings_window: false,
-            show_web_remote_window: false,
+            show_properties_window: ui_layout.show_properties_window,
+            show_objects_window: ui_layout.show_objects_window,
+            show_job_window: ui_layout.show_job_window,
+            show_connection_window: ui_layout.show_connection_window,
+            show_settings_window: ui_layout.show_settings_window,
+            show_web_remote_window: ui_layout.show_web_remote_window,
             web_remote_port: 8080,
             web_remote_active: false,
             web_remote_stopper: None,
-            show_move_window: false,
-            show_camera_window: false,
-            show_text_dialog: false,
+            show_move_window: ui_layout.show_move_window,
+            show_camera_window: ui_layout.show_camera_window,
+            show_text_dialog: ui_layout.show_text_dialog,
             text_input: "Text".to_string(),
             text_font_size: 15.0,
             text_is_singleline: false,
@@ -592,20 +597,20 @@ impl Default for LaserBurnApp {
             last_sim_version: u64::MAX,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            show_offset_window: false,
+            show_offset_window: ui_layout.show_offset_window,
             offset_distance: 2.0,
             offset_inward: false,
             offset_both: false,
             offset_delete_orig: false,
 
-            show_grid_array_window: false,
+            show_grid_array_window: ui_layout.show_grid_array_window,
             grid_columns: 3,
             grid_rows: 2,
             grid_spacing_x: 5.0,
             grid_spacing_y: 5.0,
             grid_use_spacing: true,
 
-            show_radial_array_window: false,
+            show_radial_array_window: ui_layout.show_radial_array_window,
             radial_count: 8,
             radial_total_angle: 360.0,
             radial_rotate_copies: true,
@@ -613,12 +618,12 @@ impl Default for LaserBurnApp {
             radial_center_y: 200.0,
             radial_center_auto: true,
 
-            show_device_profiles_window: false,
+            show_device_profiles_window: ui_layout.show_device_profiles_window,
             profile_new_name: String::new(),
 
-            length_unit: LengthUnit::Millimeters,
+            length_unit: ui_layout.length_unit,
 
-            show_trace_window: false,
+            show_trace_window: ui_layout.show_trace_window,
             trace_mode: crate::trace::TraceMode::Outline,
             trace_threshold: 128,
             trace_invert: false,
@@ -629,7 +634,7 @@ impl Default for LaserBurnApp {
             trace_preview_polylines: Vec::new(),
             trace_source_shape_idx: None,
 
-            show_material_test_window: false,
+            show_material_test_window: ui_layout.show_material_test_window,
             mat_test_rows: 5,
             mat_test_cols: 5,
             mat_test_min_speed: 20.0,
@@ -639,7 +644,7 @@ impl Default for LaserBurnApp {
             mat_test_box_size: 10.0,
             mat_test_is_engrave: true,
 
-            show_depth_test_window: false,
+            show_depth_test_window: ui_layout.show_depth_test_window,
             depth_test_type: DepthTestType::MultiPass,
             depth_test_steps: 6,
             depth_test_box_w: 16.0,
@@ -651,13 +656,13 @@ impl Default for LaserBurnApp {
             depth_test_interval: 0.08,
             depth_test_cross_hatch: true,
             depth_test_cut_outline: true,
-            show_traffic_panel: true,
-            hide_ok_in_traffic_log: false,
-            explain_traffic_codes: true,
+            show_traffic_panel: ui_layout.show_traffic_panel,
+            hide_ok_in_traffic_log: ui_layout.hide_ok_in_traffic_log,
+            explain_traffic_codes: ui_layout.explain_traffic_codes,
             #[cfg(target_os = "macos")]
             available_shortcuts: Vec::new(),
             material_lib: crate::material::MaterialLibrary::load_or_default(),
-            show_material_library: false,
+            show_material_library: ui_layout.show_material_library,
             mat_lib_search: String::new(),
             mat_lib_category_filter: "All Categories".to_string(),
             mat_lib_selected_category: None,
@@ -671,29 +676,30 @@ impl Default for LaserBurnApp {
             save_mat_thickness_label: "3.0 mm".to_string(),
             save_mat_op_name: "Clean Cut".to_string(),
             save_mat_notes: String::new(),
-            show_preview_window: false,
+            show_preview_window: ui_layout.show_preview_window,
             preview_progress: 0.0,
             preview_playing: false,
             preview_speed: 1.0,
             preview_job: None,
             preview_job_version: 0,
-            show_nesting_window: false,
+            show_nesting_window: ui_layout.show_nesting_window,
             nesting_options: crate::nesting::NestingOptions::default(),
             nesting_result: None,
-            show_box_maker_window: false,
+            show_box_maker_window: ui_layout.show_box_maker_window,
             box_maker_params: crate::generator::BoxMakerParams::default(),
-            show_living_hinge_window: false,
+            show_living_hinge_window: ui_layout.show_living_hinge_window,
             living_hinge_params: crate::generator::LivingHingeParams::default(),
-            show_qr_code_window: false,
+            show_qr_code_window: ui_layout.show_qr_code_window,
             qr_code_params: crate::generator::QrCodeParams::default(),
-            show_variable_text_window: false,
+            show_variable_text_window: ui_layout.show_variable_text_window,
             variable_text_params: crate::generator::VariableTextParams::default(),
-            show_tools_palette: true,
-            detach_tools_window: false,
+            show_tools_palette: ui_layout.show_tools_palette,
+            detach_tools_window: ui_layout.detach_tools_window,
             open_flyout: None,
             last_flyout_anchor: None,
             file_dialog_tx,
             file_dialog_rx,
+            ui_layout,
         };
 
         app.doc.width = app.device.settings.bed_width;
@@ -726,6 +732,130 @@ impl Default for LaserBurnApp {
 
 #[cfg(feature = "gui")]
 impl LaserBurnApp {
+    /// Creates a new LaserBurnApp initialized with eframe CreationContext and restored layout
+    pub fn new(cc: &eframe::CreationContext) -> Self {
+        let mut app = Self::default();
+        if let Some(storage) = cc.storage {
+            if let Some(saved) = eframe::get_value::<ui_layout::UiLayoutSettings>(storage, "photoncam_ui_layout") {
+                app.apply_ui_layout(saved);
+            }
+        }
+        app
+    }
+
+    /// Records an open window's position and size so it persists across runs
+    pub fn record_window_rect(&mut self, window_id: &str, rect: egui::Rect) {
+        self.ui_layout.window_rects.insert(
+            window_id.to_string(),
+            ui_layout::WindowRect {
+                x: rect.min.x,
+                y: rect.min.y,
+                width: rect.width(),
+                height: rect.height(),
+            },
+        );
+    }
+
+    /// Gets the saved or default position and size for a window
+    pub fn window_pos_size(
+        &self,
+        window_id: &str,
+        default_pos: [f32; 2],
+        default_size: [f32; 2],
+    ) -> ([f32; 2], [f32; 2]) {
+        if let Some(saved) = self.ui_layout.window_rects.get(window_id) {
+            ([saved.x, saved.y], [saved.width, saved.height])
+        } else {
+            (default_pos, default_size)
+        }
+    }
+
+    /// Captures the complete current UI layout state for saving
+    pub fn capture_ui_layout(&self) -> ui_layout::UiLayoutSettings {
+        let mut layout = self.ui_layout.clone();
+        layout.show_properties_window = self.show_properties_window;
+        layout.show_objects_window = self.show_objects_window;
+        layout.show_job_window = self.show_job_window;
+        layout.show_connection_window = self.show_connection_window;
+        layout.show_settings_window = self.show_settings_window;
+        layout.show_move_window = self.show_move_window;
+        layout.show_camera_window = self.show_camera_window;
+        layout.show_traffic_panel = self.show_traffic_panel;
+        layout.show_tools_palette = self.show_tools_palette;
+        layout.detach_tools_window = self.detach_tools_window;
+        layout.show_preview_window = self.show_preview_window;
+        layout.show_material_library = self.show_material_library;
+        layout.show_nesting_window = self.show_nesting_window;
+        layout.show_box_maker_window = self.show_box_maker_window;
+        layout.show_living_hinge_window = self.show_living_hinge_window;
+        layout.show_qr_code_window = self.show_qr_code_window;
+        layout.show_variable_text_window = self.show_variable_text_window;
+        layout.show_trace_window = self.show_trace_window;
+        layout.show_material_test_window = self.show_material_test_window;
+        layout.show_depth_test_window = self.show_depth_test_window;
+        layout.show_grid_array_window = self.show_grid_array_window;
+        layout.show_radial_array_window = self.show_radial_array_window;
+        layout.show_offset_window = self.show_offset_window;
+        layout.show_text_dialog = self.show_text_dialog;
+        layout.show_device_profiles_window = self.show_device_profiles_window;
+        layout.show_web_remote_window = self.show_web_remote_window;
+
+        layout.length_unit = self.length_unit;
+        layout.zoom = self.zoom;
+        layout.pan_x = self.pan.x;
+        layout.pan_y = self.pan.y;
+        layout.jog_step = self.jog_step;
+        layout.jog_speed = self.jog_speed;
+        layout.hide_ok_in_traffic_log = self.hide_ok_in_traffic_log;
+        layout.explain_traffic_codes = self.explain_traffic_codes;
+        layout
+    }
+
+    /// Applies a saved UI layout to active application fields
+    pub fn apply_ui_layout(&mut self, layout: ui_layout::UiLayoutSettings) {
+        self.show_properties_window = layout.show_properties_window;
+        self.show_objects_window = layout.show_objects_window;
+        self.show_job_window = layout.show_job_window;
+        self.show_connection_window = layout.show_connection_window;
+        self.show_settings_window = layout.show_settings_window;
+        self.show_move_window = layout.show_move_window;
+        self.show_camera_window = layout.show_camera_window;
+        self.show_traffic_panel = layout.show_traffic_panel;
+        self.show_tools_palette = layout.show_tools_palette;
+        self.detach_tools_window = layout.detach_tools_window;
+        self.show_preview_window = layout.show_preview_window;
+        self.show_material_library = layout.show_material_library;
+        self.show_nesting_window = layout.show_nesting_window;
+        self.show_box_maker_window = layout.show_box_maker_window;
+        self.show_living_hinge_window = layout.show_living_hinge_window;
+        self.show_qr_code_window = layout.show_qr_code_window;
+        self.show_variable_text_window = layout.show_variable_text_window;
+        self.show_trace_window = layout.show_trace_window;
+        self.show_material_test_window = layout.show_material_test_window;
+        self.show_depth_test_window = layout.show_depth_test_window;
+        self.show_grid_array_window = layout.show_grid_array_window;
+        self.show_radial_array_window = layout.show_radial_array_window;
+        self.show_offset_window = layout.show_offset_window;
+        self.show_text_dialog = layout.show_text_dialog;
+        self.show_device_profiles_window = layout.show_device_profiles_window;
+        self.show_web_remote_window = layout.show_web_remote_window;
+
+        self.length_unit = layout.length_unit;
+        self.zoom = layout.zoom;
+        self.pan = egui::Vec2::new(layout.pan_x, layout.pan_y);
+        self.jog_step = layout.jog_step;
+        self.jog_speed = layout.jog_speed;
+        self.hide_ok_in_traffic_log = layout.hide_ok_in_traffic_log;
+        self.explain_traffic_codes = layout.explain_traffic_codes;
+        self.ui_layout = layout;
+    }
+
+    /// Saves the current UI layout to disk immediately
+    pub fn save_ui_layout_to_disk(&self) {
+        let layout = self.capture_ui_layout();
+        let _ = layout.save_to_disk();
+    }
+
     /// Returns "Cmd" on macOS and "Ctrl" on Windows / Linux for native shortcut displays
     pub fn cmd_key() -> &'static str {
         if cfg!(target_os = "macos") {
@@ -3776,10 +3906,13 @@ impl LaserBurnApp {
         let color_blue = self.color_blue();
         let lang = self.device.settings.language;
         let tr = |k| crate::i18n::t(k, lang);
+        let (def_pos, def_size) = self.window_pos_size("material_library_dialog", [100.0, 60.0], [820.0, 560.0]);
 
-        egui::Window::new(tr("Material Library & Database"))
+        let resp = egui::Window::new(tr("Material Library & Database"))
+            .id(egui::Id::new("material_library_dialog"))
             .open(&mut is_open)
-            .default_size([820.0, 560.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .min_width(680.0)
             .min_height(460.0)
             .resizable(true)
@@ -4083,6 +4216,9 @@ impl LaserBurnApp {
                 });
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("material_library_dialog", r.response.rect);
+        }
         self.mat_lib_search = search;
         self.mat_lib_category_filter = cat_filter;
         self.show_material_library = is_open;
@@ -4157,12 +4293,15 @@ impl LaserBurnApp {
 
         let lang = self.device.settings.language;
         let tr = |k| crate::i18n::t(k, lang);
+        let (def_pos, def_size) = self.window_pos_size("save_material_dialog", [150.0, 100.0], [380.0, 360.0]);
 
-        egui::Window::new(tr("Save Layer to Material Library"))
+        let resp = egui::Window::new(tr("Save Layer to Material Library"))
+            .id(egui::Id::new("save_material_dialog"))
             .open(&mut is_open)
             .collapsible(true)
             .resizable(false)
-            .default_width(380.0)
+            .default_pos(def_pos)
+            .default_size(def_size)
             .show(ctx, |ui| {
                 ui.heading("Save Preset to Library");
                 ui.label(egui::RichText::new("Saves the active layer's cut speed, power, passes, and air assist into your material database.").small().weak());
@@ -4213,6 +4352,10 @@ impl LaserBurnApp {
                     }
                 });
             });
+
+        if let Some(r) = resp {
+            self.record_window_rect("save_material_dialog", r.response.rect);
+        }
 
         if cancel_clicked {
             is_open = false;
@@ -4393,9 +4536,12 @@ impl LaserBurnApp {
         }
 
         let mut is_open = true;
-        egui::Window::new(tr("Laser Cut Preview & Simulation"))
+        let (def_pos, def_size) = self.window_pos_size("cut_preview_dialog", [120.0, 60.0], [720.0, 530.0]);
+        let resp = egui::Window::new(tr("Laser Cut Preview & Simulation"))
+            .id(egui::Id::new("cut_preview_dialog"))
             .open(&mut is_open)
-            .default_size([720.0, 530.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(true)
             .show(ctx, |ui| {
                 // Top control bar: Play, Pause, Rewind, Speeds
@@ -4602,6 +4748,9 @@ impl LaserBurnApp {
                 }
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("cut_preview_dialog", r.response.rect);
+        }
         if !is_open {
             self.show_preview_window = false;
             self.preview_playing = false;
@@ -4620,10 +4769,13 @@ impl LaserBurnApp {
         let mut is_open = true;
         let mut do_apply = false;
         let mut do_run = false;
+        let (def_pos, def_size) = self.window_pos_size("auto_nesting_dialog", [140.0, 70.0], [440.0, 460.0]);
 
-        egui::Window::new(tr("Auto-Nest Materials Optimizer"))
+        let resp = egui::Window::new(tr("Auto-Nest Materials Optimizer"))
+            .id(egui::Id::new("auto_nesting_dialog"))
             .open(&mut is_open)
-            .default_size([440.0, 460.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(tr("Auto-Nest (Material Packing)"));
@@ -4739,6 +4891,9 @@ impl LaserBurnApp {
                 }
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("auto_nesting_dialog", r.response.rect);
+        }
         if !is_open {
             self.show_nesting_window = false;
         }
@@ -4780,10 +4935,13 @@ impl LaserBurnApp {
         let mut is_open = true;
         let mut do_gen = false;
         let mut do_close = false;
+        let (def_pos, def_size) = self.window_pos_size("depth_test_dialog", [160.0, 80.0], [450.0, 480.0]);
 
-        egui::Window::new(tr("Engraving Depth Test Generator"))
+        let resp = egui::Window::new(tr("Engraving Depth Test Generator"))
+            .id(egui::Id::new("depth_test_dialog"))
             .open(&mut is_open)
-            .default_width(450.0)
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.heading(tr("Engraving Depth Test (Caliper Calibration)"));
@@ -4891,6 +5049,9 @@ impl LaserBurnApp {
                 });
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("depth_test_dialog", r.response.rect);
+        }
         if do_gen {
             self.generate_depth_test_grid();
         }
@@ -7159,11 +7320,14 @@ impl eframe::App for LaserBurnApp {
             let mut close_dialog = false;
             let mut do_add_text = false;
             let mut is_open = true;
+            let (def_pos, def_size) = self.window_pos_size("text_tool_dialog", [180.0, 90.0], [380.0, 420.0]);
 
-            egui::Window::new(tr("Text Tool"))
+            let resp = egui::Window::new(tr("Text Tool"))
+                .id(egui::Id::new("text_tool_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(380.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading(tr("Text Creation for Laser"));
@@ -7292,6 +7456,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("text_tool_dialog", r.response.rect);
+            }
             if do_add_text {
                 self.add_text_to_document();
             }
@@ -7309,11 +7476,14 @@ impl eframe::App for LaserBurnApp {
             let mut close_offset = false;
             let mut do_apply_offset = false;
             let mut is_open = true;
+            let (def_pos, def_size) = self.window_pos_size("offset_shapes_dialog", [200.0, 100.0], [340.0, 280.0]);
 
-            egui::Window::new(tr("Offset Shapes (Contour)"))
+            let resp = egui::Window::new(tr("Offset Shapes (Contour)"))
+                .id(egui::Id::new("offset_shapes_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(340.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading(tr("Create Contour Offset"));
@@ -7365,6 +7535,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("offset_shapes_dialog", r.response.rect);
+            }
             if do_apply_offset {
                 self.apply_offset_selected();
             }
@@ -7382,11 +7555,14 @@ impl eframe::App for LaserBurnApp {
             let mut close_grid = false;
             let mut do_apply = false;
             let mut is_open = true;
+            let (def_pos, def_size) = self.window_pos_size("grid_array_dialog", [220.0, 110.0], [340.0, 320.0]);
 
-            egui::Window::new(tr("Grid Array"))
+            let resp = egui::Window::new(tr("Grid Array"))
+                .id(egui::Id::new("grid_array_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(340.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading("Duplicate Grid Array");
@@ -7437,6 +7613,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("grid_array_dialog", r.response.rect);
+            }
             if do_apply {
                 self.apply_grid_array();
             }
@@ -7454,11 +7633,14 @@ impl eframe::App for LaserBurnApp {
             let mut close_radial = false;
             let mut do_apply = false;
             let mut is_open = true;
+            let (def_pos, def_size) = self.window_pos_size("radial_array_dialog", [240.0, 120.0], [340.0, 340.0]);
 
-            egui::Window::new(tr("Radial Array (Circular)"))
+            let resp = egui::Window::new(tr("Radial Array (Circular)"))
+                .id(egui::Id::new("radial_array_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(340.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading(tr("Duplicate Radial Array"));
@@ -7509,6 +7691,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("radial_array_dialog", r.response.rect);
+            }
             if do_apply {
                 self.apply_radial_array();
             }
@@ -7534,11 +7719,14 @@ impl eframe::App for LaserBurnApp {
 
             let count = self.trace_preview_polylines.len();
             let total_pts: usize = self.trace_preview_polylines.iter().map(|p| p.points.len()).sum();
+            let (def_pos, def_size) = self.window_pos_size("trace_image_dialog", [150.0, 80.0], [400.0, 500.0]);
 
-            egui::Window::new(tr("Trace Image (Bitmap to Vector)"))
+            let resp = egui::Window::new(tr("Trace Image (Bitmap to Vector)"))
+                .id(egui::Id::new("trace_image_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(400.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading(tr("Trace Raster Image to Vectors"));
@@ -7673,6 +7861,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("trace_image_dialog", r.response.rect);
+            }
             if do_trace {
                 self.apply_trace_image();
             }
@@ -7691,11 +7882,14 @@ impl eframe::App for LaserBurnApp {
             let tr = |k| crate::i18n::t(k, lang);
             let mut close_profiles = false;
             let mut is_open = true;
+            let (def_pos, def_size) = self.window_pos_size("machine_profiles_dialog", [180.0, 90.0], [460.0, 420.0]);
 
-            egui::Window::new(tr("Manage Machine Profiles"))
+            let resp = egui::Window::new(tr("Manage Machine Profiles"))
+                .id(egui::Id::new("machine_profiles_dialog"))
                 .collapsible(true)
                 .resizable(true)
-                .default_width(460.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading(tr("Laser Machine Profiles"));
@@ -7773,6 +7967,9 @@ impl eframe::App for LaserBurnApp {
                     }
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("machine_profiles_dialog", r.response.rect);
+            }
             if close_profiles || !is_open {
                 self.show_device_profiles_window = false;
             }
@@ -7787,11 +7984,14 @@ impl eframe::App for LaserBurnApp {
             let mut close_mat = false;
             let mut do_gen_mat = false;
             let mut is_open = true;
+            let (def_pos, def_size) = self.window_pos_size("material_test_dialog", [170.0, 75.0], [390.0, 480.0]);
 
-            egui::Window::new(tr("Material Test Generator"))
+            let resp = egui::Window::new(tr("Material Test Generator"))
+                .id(egui::Id::new("material_test_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(390.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading("Power vs. Speed Test Matrix");
@@ -7857,6 +8057,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("material_test_dialog", r.response.rect);
+            }
             if do_gen_mat {
                 self.generate_material_test_grid();
             }
@@ -7883,11 +8086,14 @@ impl eframe::App for LaserBurnApp {
             let tr = |k| crate::i18n::t(k, lang);
             let c_green = self.color_green();
             let c_orange = self.color_orange();
-            egui::Window::new(tr("Device Connection & Console"))
+            let (def_pos, def_size) = self.window_pos_size("connection_console_dialog", [100.0, 100.0], [450.0, 480.0]);
+
+            let resp = egui::Window::new(tr("Device Connection & Console"))
+                .id(egui::Id::new("connection_console_dialog"))
                 .collapsible(true)
                 .resizable(true)
-                .default_width(450.0)
-                .default_height(480.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut self.show_connection_window)
                 .show(ctx, |ui| {
                     ui.heading(tr("Serial Port & Controller Connection"));
@@ -8067,6 +8273,10 @@ impl eframe::App for LaserBurnApp {
                         }
                     });
                 });
+
+            if let Some(r) = resp {
+                self.record_window_rect("connection_console_dialog", r.response.rect);
+            }
         }
 
         // -------------------------------------------------------------
@@ -8080,11 +8290,14 @@ impl eframe::App for LaserBurnApp {
             let mut do_start_contour_frame = false;
             let c_green = self.color_green();
             let c_orange = self.color_orange();
+            let (def_pos, def_size) = self.window_pos_size("laser_control_dialog", [140.0, 100.0], [380.0, 520.0]);
 
-            egui::Window::new(tr("Laser Control & Positioning"))
+            let resp = egui::Window::new(tr("Laser Control & Positioning"))
+                .id(egui::Id::new("laser_control_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(380.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut self.show_move_window)
                 .show(ctx, |ui| {
                     ui.heading(tr("Laser Head Positioning & Jog"));
@@ -8482,6 +8695,9 @@ impl eframe::App for LaserBurnApp {
                     }
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("laser_control_dialog", r.response.rect);
+            }
             if do_start_box_frame {
                 self.start_box_frame();
             }
@@ -8499,11 +8715,14 @@ impl eframe::App for LaserBurnApp {
             let mut do_import_settings = false;
             let lang = self.device.settings.language;
             let tr = |k| crate::i18n::t(k, lang);
+            let (def_pos, def_size) = self.window_pos_size("device_settings_dialog", [160.0, 100.0], [420.0, 560.0]);
 
-            egui::Window::new(tr("Device & Bed Settings"))
+            let resp = egui::Window::new(tr("Device & Bed Settings"))
+                .id(egui::Id::new("device_settings_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(420.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut self.show_settings_window)
                 .show(ctx, |ui| {
                     ui.heading(tr("PhotonCAM Settings"));
@@ -8713,6 +8932,9 @@ impl eframe::App for LaserBurnApp {
                     });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("device_settings_dialog", r.response.rect);
+            }
             if close_settings {
                 self.show_settings_window = false;
             }
@@ -8733,11 +8955,14 @@ impl eframe::App for LaserBurnApp {
             let mut do_stop = false;
             let web_active = self.web_remote_active;
             let web_port = self.web_remote_port;
+            let (def_pos, def_size) = self.window_pos_size("web_remote_dialog", [180.0, 110.0], [460.0, 520.0]);
 
-            egui::Window::new("🌐 PhotonCAM Web Remote & iPad Bridge")
+            let resp = egui::Window::new("🌐 PhotonCAM Web Remote & iPad Bridge")
+                .id(egui::Id::new("web_remote_dialog"))
                 .collapsible(true)
                 .resizable(false)
-                .default_width(460.0)
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .open(&mut is_open)
                 .show(ctx, |ui| {
                     ui.heading("🌐 Ohjaa laseria iPadilla tai puhelimella");
@@ -8794,6 +9019,9 @@ impl eframe::App for LaserBurnApp {
                     ui.label("Skripti luo systemd-palvelun, joka käynnistää PhotonCAM-sillan automaattisesti aina kun Pi saa virtaa.");
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("web_remote_dialog", r.response.rect);
+            }
             self.show_web_remote_window = is_open;
             if do_start {
                 self.start_web_remote();
@@ -8814,10 +9042,13 @@ impl eframe::App for LaserBurnApp {
 
             let max_w = (ctx.screen_rect().width() - 40.0).max(450.0);
             let max_h = (ctx.screen_rect().height() - 40.0).max(520.0);
+            let (def_pos, def_size) = self.window_pos_size("camera_feed_dialog", [100.0, 60.0], [500.0, 640.0]);
 
-            egui::Window::new(tr("Camera Feed & Alignment"))
+            let resp = egui::Window::new(tr("Camera Feed & Alignment"))
+                .id(egui::Id::new("camera_feed_dialog"))
                 .open(&mut is_open)
-                .default_size([500.0, 640.0])
+                .default_pos(def_pos)
+                .default_size(def_size)
                 .min_size([400.0, 480.0])
                 .max_size([max_w, max_h])
                 .constrain(true)
@@ -9486,11 +9717,29 @@ impl eframe::App for LaserBurnApp {
                         });
                 });
 
+            if let Some(r) = resp {
+                self.record_window_rect("camera_feed_dialog", r.response.rect);
+            }
             self.show_camera_window = is_open;
         }
 
         // V2 Photoshop-Style Tool Palette & Flyouts
         self.render_tool_palette_v2(ctx);
+
+        // Track main window dimensions
+        let screen_rect = ctx.screen_rect();
+        self.ui_layout.main_window_width = Some(screen_rect.width());
+        self.ui_layout.main_window_height = Some(screen_rect.height());
+    }
+
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let layout = self.capture_ui_layout();
+        eframe::set_value(storage, "photoncam_ui_layout", &layout);
+        let _ = layout.save_to_disk();
+    }
+
+    fn auto_save_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(10)
     }
 }
 
@@ -10811,5 +11060,46 @@ endsolid coin
         let l1 = app.doc.layers.get(&1).expect("Layer 1 must exist");
         assert_eq!(l1.cut_setting.line_interval, 0.05);
         assert_eq!(l1.cut_setting.mode, CutMode::Fill);
+    }
+
+    #[test]
+    fn test_ui_layout_persistence_and_window_geometry() {
+        let mut app = LaserBurnApp::default();
+        app.show_objects_window = true;
+        app.show_material_library = true;
+        app.zoom = 3.2;
+        app.pan = egui::Vec2::new(310.0, 150.0);
+        app.jog_step = 50.0;
+        app.jog_speed = 6000.0;
+
+        app.record_window_rect(
+            "floating_properties_window",
+            egui::Rect::from_min_size(egui::pos2(500.0, 120.0), egui::vec2(380.0, 600.0)),
+        );
+
+        let layout = app.capture_ui_layout();
+        assert_eq!(layout.show_objects_window, true);
+        assert_eq!(layout.show_material_library, true);
+        assert_eq!(layout.show_camera_window, false);
+        assert!((layout.zoom - 3.2).abs() < 1e-4);
+        assert!((layout.pan_x - 310.0).abs() < 1e-4);
+        assert!((layout.pan_y - 150.0).abs() < 1e-4);
+        assert!((layout.jog_step - 50.0).abs() < 1e-4);
+        assert!((layout.jog_speed - 6000.0).abs() < 1e-4);
+
+        let (pos, size) = app.window_pos_size("floating_properties_window", [0.0, 0.0], [100.0, 100.0]);
+        assert_eq!(pos, [500.0, 120.0]);
+        assert_eq!(size, [380.0, 600.0]);
+
+        // Create new app instance and restore
+        let mut new_app = LaserBurnApp::default();
+        new_app.apply_ui_layout(layout);
+        assert_eq!(new_app.show_objects_window, true);
+        assert_eq!(new_app.show_material_library, true);
+        assert!((new_app.zoom - 3.2).abs() < 1e-4);
+        assert!((new_app.pan.x - 310.0).abs() < 1e-4);
+        let (restored_pos, restored_size) = new_app.window_pos_size("floating_properties_window", [0.0, 0.0], [100.0, 100.0]);
+        assert_eq!(restored_pos, [500.0, 120.0]);
+        assert_eq!(restored_size, [380.0, 600.0]);
     }
 }

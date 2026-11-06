@@ -114,15 +114,16 @@ impl LaserBurnApp {
         }
 
         let is_dark = self.device.settings.dark_mode;
+        let (def_pos, def_size) = self.window_pos_size("floating_v2_tools_window", [14.0, 160.0], [44.0, 260.0]);
 
         // Strictly constrain the floating palette to 44 px width inside the main window
         let window = egui::Window::new("tools_palette_window")
             .id(egui::Id::new("floating_v2_tools_window"))
-            .default_pos([14.0, 160.0])
+            .default_pos(def_pos)
             .resizable(false)
             .collapsible(false)
             .title_bar(false)
-            .fixed_size([44.0, 260.0])
+            .fixed_size(def_size)
             .frame(
                 egui::Frame::window(ctx.style().as_ref())
                     .corner_radius(8.0)
@@ -137,9 +138,12 @@ impl LaserBurnApp {
                     .inner_margin(egui::Margin::symmetric(4, 6))
             );
 
-        window.show(ctx, |ui| {
+        let resp = window.show(ctx, |ui| {
             self.render_palette_vertical_buttons(ui, ctx);
         });
+        if let Some(r) = resp {
+            self.record_window_rect("floating_v2_tools_window", r.response.rect);
+        }
 
         // Render flyout submenu to the side of the active category button
         self.render_palette_flyout_card(ctx);

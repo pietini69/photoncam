@@ -276,13 +276,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         #[cfg(feature = "gui")]
         Commands::Gui => {
-            let mut app = photoncam::PhotonCamApp::default();
-            if let Some(ref f) = cli.file {
-                let _ = app.open_file(f);
-            }
+            let layout = photoncam::gui::ui_layout::UiLayoutSettings::load_or_default();
+            let width = layout.main_window_width.unwrap_or(1880.0);
+            let height = layout.main_window_height.unwrap_or(1050.0);
 
             let mut viewport = eframe::egui::ViewportBuilder::default()
-                .with_inner_size([1880.0, 1050.0])
+                .with_inner_size([width, height])
                 .with_min_inner_size([1280.0, 750.0])
                 .with_title("PhotonCAM - Modern Laser CAM");
 
@@ -303,10 +302,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 viewport,
                 ..Default::default()
             };
+            let open_file = cli.file.clone();
             eframe::run_native(
                 "PhotonCAM",
                 options,
-                Box::new(move |_cc| Ok(Box::new(app))),
+                Box::new(move |cc| {
+                    let mut app = photoncam::PhotonCamApp::new(cc);
+                    if let Some(ref f) = open_file {
+                        let _ = app.open_file(f);
+                    }
+                    Ok(Box::new(app))
+                }),
             )?;
         }
     }

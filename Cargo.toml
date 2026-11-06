@@ -14,7 +14,7 @@ log = "0.4"
 env_logger = "0.11"
 rayon = "1.10"
 roxmltree = "0.20"
-eframe = { version = "0.31", optional = true }
+eframe = { version = "0.31", optional = true, features = ["persistence"] }
 rfd = { version = "0.15", optional = true }
 pollster = { version = "0.4", optional = true }
 ttf-parser = "0.25"

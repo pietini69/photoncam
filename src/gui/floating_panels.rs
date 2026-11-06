@@ -15,12 +15,13 @@ impl LaserBurnApp {
         let tr = |k| crate::i18n::t(k, lang);
         let mut is_open = true;
         let screen_rect = ctx.screen_rect();
+        let (def_pos, def_size) = self.window_pos_size("floating_properties_window", [screen_rect.width() - 390.0, 50.0], [370.0, 680.0]);
 
-        egui::Window::new(tr("Properties & Layers"))
+        let resp = egui::Window::new(tr("Properties & Layers"))
             .id(egui::Id::new("floating_properties_window"))
             .open(&mut is_open)
-            .default_pos([screen_rect.width() - 390.0, 50.0])
-            .default_size([370.0, 680.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .min_width(320.0)
             .min_height(200.0)
             .resizable(true)
@@ -995,6 +996,9 @@ impl LaserBurnApp {
                     });
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("floating_properties_window", r.response.rect);
+        }
         self.show_properties_window = is_open;
     }
 
@@ -1010,12 +1014,13 @@ impl LaserBurnApp {
         let screen_rect = ctx.screen_rect();
         let obj_count = self.doc.shapes.len();
         let sel_count = self.selected_shape_indices.len();
+        let (def_pos, def_size) = self.window_pos_size("floating_objects_window", [screen_rect.width() - 390.0, 480.0], [340.0, 360.0]);
 
-        egui::Window::new(format!("{} ({})", tr("Objects List"), obj_count))
+        let resp = egui::Window::new(format!("{} ({})", tr("Objects List"), obj_count))
             .id(egui::Id::new("floating_objects_window"))
             .open(&mut is_open)
-            .default_pos([screen_rect.width() - 390.0, 480.0])
-            .default_size([340.0, 360.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .min_width(280.0)
             .min_height(160.0)
             .resizable(true)
@@ -1090,6 +1095,9 @@ impl LaserBurnApp {
                     });
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("floating_objects_window", r.response.rect);
+        }
         self.show_objects_window = is_open;
     }
 
@@ -1109,12 +1117,13 @@ impl LaserBurnApp {
         } else {
             tr("Job Control").to_string()
         };
+        let (def_pos, def_size) = self.window_pos_size("floating_job_control_window", [screen_rect.width() - 390.0, 90.0], [350.0, 360.0]);
 
-        egui::Window::new(job_header_text)
+        let resp = egui::Window::new(job_header_text)
             .id(egui::Id::new("floating_job_control_window"))
             .open(&mut is_open)
-            .default_pos([screen_rect.width() - 390.0, 90.0])
-            .default_size([350.0, 360.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .min_width(290.0)
             .min_height(180.0)
             .resizable(true)
@@ -1304,6 +1313,9 @@ impl LaserBurnApp {
                     });
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("floating_job_control_window", r.response.rect);
+        }
         self.show_job_window = is_open;
     }
 
@@ -1316,12 +1328,13 @@ impl LaserBurnApp {
         let lang = self.device.settings.language;
         let tr = |k| crate::i18n::t(k, lang);
         let mut is_traffic_open = true;
+        let (def_pos, def_size) = self.window_pos_size("serial_traffic_window", [ctx.screen_rect().width() - 480.0, 140.0], [360.0, 480.0]);
 
-        egui::Window::new(tr("Data Traffic (TX / RX)"))
+        let resp = egui::Window::new(tr("Data Traffic (TX / RX)"))
             .id(egui::Id::new("serial_traffic_window"))
             .open(&mut is_traffic_open)
-            .default_pos([ctx.screen_rect().width() - 480.0, 140.0])
-            .default_size([360.0, 480.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .min_width(260.0)
             .min_height(200.0)
             .resizable(true)
@@ -1436,6 +1449,9 @@ impl LaserBurnApp {
                     });
             });
 
+        if let Some(r) = resp {
+            self.record_window_rect("serial_traffic_window", r.response.rect);
+        }
         self.show_traffic_panel = is_traffic_open;
     }
 }

@@ -29,10 +29,12 @@ impl LaserBurnApp {
         let mut is_open = true;
         let mut do_generate = false;
 
-        egui::Window::new(tr("Finger Joint Box Designer"))
+        let (def_pos, def_size) = self.window_pos_size("box_maker_dialog_window", [100.0, 100.0], [460.0, 520.0]);
+        let resp = egui::Window::new(tr("Finger Joint Box Designer"))
             .id(egui::Id::new("box_maker_dialog_window"))
             .open(&mut is_open)
-            .default_size([460.0, 520.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.heading(tr("📦 Box & Enclosure Generator"));
@@ -169,6 +171,10 @@ impl LaserBurnApp {
         if !is_open {
             self.show_box_maker_window = false;
         }
+
+        if let Some(r) = resp {
+            self.record_window_rect("box_maker_dialog_window", r.response.rect);
+        }
     }
 
     // -------------------------------------------------------------
@@ -184,10 +190,12 @@ impl LaserBurnApp {
         let mut is_open = true;
         let mut do_generate = false;
 
-        egui::Window::new(tr("Living Hinge Generator"))
+        let (def_pos, def_size) = self.window_pos_size("living_hinge_dialog_window", [120.0, 120.0], [440.0, 480.0]);
+        let resp = egui::Window::new(tr("Living Hinge Generator"))
             .id(egui::Id::new("living_hinge_dialog_window"))
             .open(&mut is_open)
-            .default_size([440.0, 480.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.heading(tr("🌀 Living Hinge Laser Patterns"));
@@ -324,6 +332,10 @@ impl LaserBurnApp {
         if !is_open {
             self.show_living_hinge_window = false;
         }
+
+        if let Some(r) = resp {
+            self.record_window_rect("living_hinge_dialog_window", r.response.rect);
+        }
     }
 
     // -------------------------------------------------------------
@@ -339,10 +351,12 @@ impl LaserBurnApp {
         let mut is_open = true;
         let mut do_generate = false;
 
-        egui::Window::new(tr("Vector QR Code Generator"))
+        let (def_pos, def_size) = self.window_pos_size("qr_code_dialog_window", [140.0, 140.0], [420.0, 440.0]);
+        let resp = egui::Window::new(tr("Vector QR Code Generator"))
             .id(egui::Id::new("qr_code_dialog_window"))
             .open(&mut is_open)
-            .default_size([420.0, 440.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.heading(tr("📱 Vector QR Code"));
@@ -464,6 +478,10 @@ impl LaserBurnApp {
         if !is_open {
             self.show_qr_code_window = false;
         }
+
+        if let Some(r) = resp {
+            self.record_window_rect("qr_code_dialog_window", r.response.rect);
+        }
     }
 
     // -------------------------------------------------------------
@@ -479,10 +497,12 @@ impl LaserBurnApp {
         let mut is_open = true;
         let mut do_generate = false;
 
-        egui::Window::new(tr("Batch Variable Text & Serial Numbers"))
+        let (def_pos, def_size) = self.window_pos_size("variable_text_dialog_window", [160.0, 160.0], [500.0, 560.0]);
+        let resp = egui::Window::new(tr("Batch Variable Text & Serial Numbers"))
             .id(egui::Id::new("variable_text_dialog_window"))
             .open(&mut is_open)
-            .default_size([500.0, 560.0])
+            .default_pos(def_pos)
+            .default_size(def_size)
             .resizable(true)
             .show(ctx, |ui| {
                 ui.heading(tr("🏷️ Batch Serial Numbers & Name Badges"));
@@ -646,6 +666,10 @@ impl LaserBurnApp {
 
         if !is_open {
             self.show_variable_text_window = false;
+        }
+
+        if let Some(r) = resp {
+            self.record_window_rect("variable_text_dialog_window", r.response.rect);
         }
     }
 }
