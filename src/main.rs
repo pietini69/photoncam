@@ -281,6 +281,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let height = layout.main_window_height.unwrap_or(1050.0);
 
             let mut viewport = eframe::egui::ViewportBuilder::default()
+                .with_app_id("PhotonCAM")
                 .with_inner_size([width, height])
                 .with_min_inner_size([1280.0, 750.0])
                 .with_title("PhotonCAM - Modern Laser CAM");

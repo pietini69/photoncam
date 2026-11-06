@@ -719,7 +719,6 @@ impl Default for LaserBurnApp {
         app.text_font_size = 15.0;
         app.text_is_singleline = false;
         app.selected_layer = 0;
-        app.show_text_dialog = false;
 
         // Laser starts in safe OFF state with head at origin
         app.device.is_weak_light_on = false;
@@ -9730,6 +9729,11 @@ impl eframe::App for LaserBurnApp {
         let screen_rect = ctx.screen_rect();
         self.ui_layout.main_window_width = Some(screen_rect.width());
         self.ui_layout.main_window_height = Some(screen_rect.height());
+
+        // Ensure layout is saved to disk immediately if closing window
+        if ctx.input(|i| i.viewport().close_requested()) {
+            self.save_ui_layout_to_disk();
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
