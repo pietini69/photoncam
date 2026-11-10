@@ -4,6 +4,25 @@ All notable changes, new features, and bug fixes for **PhotonCAM** across every 
 
 ---
 
+## [v1.2.9] – 2026-11-10
+
+### 🐛 Bug Fixes & Vector Import Hardening
+* **📐 SVG Elliptical Arc Tessellation (Fix for "Cut Off" Rounded Corners):**
+  * Fully implemented W3C SVG 1.1 Appendix F.6 compliant elliptical arc tessellation algorithm (`A` and `a` path commands) in `src/formats/svg.rs`.
+  * Corrected start angle $\theta_1$, angular sweep $\Delta\theta$, large-arc and sweep flag orientation, and radii auto-scaling ($\Lambda > 1.0$).
+  * Handles concatenated SVG boolean flags without whitespace (e.g. `01` or `00`).
+  * Resolves issue where rounded corners appeared clipped with straight diagonal chords.
+* **🔄 LightBurn `.lbrn2` MirrorY Coordinate Correction (Fix for Upside-Down Import):**
+  * Fixed canvas inversion for `.lbrn2` projects created on laser machines with Bottom-Left / Front-Left machine origins (`MirrorY="True"`, such as Creality Falcon 2 Pro / GRBL).
+  * Automatically inverts shapes vertically around the project's bounding box center in `src/formats/lbrn2.rs` to maintain exact visual orientation matching LightBurn.
+  * Corrected font glyph polyline rendering for synthesized text paths when `MirrorY="True"`.
+* **🧊 3D Sliced Relief Engraving & Depth Matrix Generators:**
+  * Multi-pass heightmap progressive slicing with collision prevention and safe Z retract planes.
+  * Direct GLB, glTF, and STL 3D mesh import with automated heightmap relief projection.
+  * Caliper Engraving Depth Test generator for precision laser calibration.
+
+---
+
 ## [v1.2.8] – 2026-10-31
 
 ### 🌟 New Features & Major Vector Fill (Engrave & Hatch) Upgrades

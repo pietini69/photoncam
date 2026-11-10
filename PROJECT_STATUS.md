@@ -1,8 +1,8 @@
 # PhotonCAM — Project Status & Architecture Context
 
-## Current Status (v1.2.8 — October 31, 2026)
+## Current Status (v1.2.9 — November 10, 2026)
 **PhotonCAM** (formerly LaserBurn) is a high-performance, modern laser CAM/CNC software engineered from the ground up in Rust (`eframe`/`egui`).
-It is currently at version **v1.2.8** (all unit tests passing), deployed as a signed macOS Universal 2 DMG/ZIP (`dist/`), Windows x64 portable ZIP, Linux x86_64 tarball, and headless Raspberry Pi ARM64/ARMv7 daemons.
+It is currently at version **v1.2.9** (all unit tests passing), deployed as a signed macOS Universal 2 DMG/ZIP (`dist/`), Windows x64 portable ZIP, Linux x86_64 tarball, and headless Raspberry Pi ARM64/ARMv7 daemons.
 Official GitHub Repository: `https://github.com/pietini69/photoncam.git`
 Live Gumroad Product: `https://shop.pietiniart.com/l/photoncam` (ID: `1SXqccPmq2GJB3uOomjR3Q==`)
 

@@ -440,6 +440,18 @@ impl Lbrn2File {
 
         Self::parse_shapes_recursive(root, Transform2D::default(), &shared_prims, &mut doc, None, mirror_x, mirror_y);
 
+        // In LightBurn, MirrorY="True" indicates that the project was created with a Bottom-Left
+        // (Front-Left) machine origin, where coordinates are Cartesian with Y+ pointing up.
+        // Invert Y around the bounding box vertical center to preserve identical visual orientation
+        // on PhotonCAM's top-down canvas (matching DXF and PDF import behavior).
+        if mirror_y && !doc.shapes.is_empty() {
+            let b = doc.bounds();
+            let mid_y = b.min_y + b.height() * 0.5;
+            for shape in &mut doc.shapes {
+                Self::flip_shape_y(shape, mid_y);
+            }
+        }
+
         // Ensure all layers referenced by shapes exist in doc.layers
         let shape_layer_indices: Vec<usize> = doc.shapes.iter().map(|s| s.layer_index()).collect();
         for idx in shape_layer_indices {
@@ -451,6 +463,30 @@ impl Lbrn2File {
 
         // Keep authentic coordinates and bed size intact! Do not shift shapes or resize bed.
         Ok(doc)
+    }
+
+    fn flip_shape_y(shape: &mut Shape, mid_y: f64) {
+        match shape {
+            Shape::Rect { y, height, .. } => {
+                *y = 2.0 * mid_y - (*y + *height);
+            }
+            Shape::Circle { center, .. } => {
+                center.y = 2.0 * mid_y - center.y;
+            }
+            Shape::Path { polyline, .. } => {
+                for pt in &mut polyline.points {
+                    pt.y = 2.0 * mid_y - pt.y;
+                }
+            }
+            Shape::Group { shapes, .. } => {
+                for s in shapes {
+                    Self::flip_shape_y(s, mid_y);
+                }
+            }
+            Shape::Image { y, height, .. } => {
+                *y = 2.0 * mid_y - (*y + *height);
+            }
+        }
     }
 
     fn parse_shapes_recursive(
@@ -653,13 +689,6 @@ impl Lbrn2File {
                         if let Some(vl_node) = bp_node.children().find(|n| n.has_tag_name("VertList")) {
                             if let Some(vl_text) = vl_node.text() {
                                 let mut verts = parse_vert_list(vl_text);
-                                if mirror_x {
-                                    for v in &mut verts {
-                                        v.pt.x = -v.pt.x;
-                                        v.c0.x = -v.c0.x;
-                                        v.c1.x = -v.c1.x;
-                                    }
-                                }
                                 if !mirror_y {
                                     for v in &mut verts {
                                         v.pt.y = -v.pt.y;
@@ -765,7 +794,10 @@ impl Lbrn2File {
                                 let world_pts: Vec<Point2D> = poly
                                     .points
                                     .iter()
-                                    .map(|p| cur_xform.apply(Point2D::new(p.x, p.y + y_offset)))
+                                    .map(|p| {
+                                        let py = if mirror_y { -p.y } else { p.y };
+                                        cur_xform.apply(Point2D::new(p.x, py + y_offset))
+                                    })
                                     .collect();
                                 if !world_pts.is_empty() {
                                     doc.add_shape(Shape::Path {
@@ -1116,6 +1148,13 @@ mod tests {
             let max_x = text_shapes.iter().map(|s| s.bounds().max_x).fold(f64::NEG_INFINITY, f64::max);
             assert!(min_x < 195.0, "The '4' should be on the left (x < 195.0, got {})", min_x);
             assert!(max_x > 204.0, "The 'm' should be on the right (x > 204.0, got {})", max_x);
+
+            // Verify ruler and text are right-side up (not flipped upside down)
+            if let Shape::Path { polyline, .. } = &doc.shapes[0] {
+                let left_tick_min_y = polyline.points.iter().filter(|p| p.x < 180.0).map(|p| p.y).fold(f64::INFINITY, f64::min);
+                let right_tick_min_y = polyline.points.iter().filter(|p| p.x > 214.0).map(|p| p.y).fold(f64::INFINITY, f64::min);
+                assert!(left_tick_min_y < right_tick_min_y, "Ruler left tick should be at the top (left Y {} < right Y {})", left_tick_min_y, right_tick_min_y);
+            }
         }
     }
 
