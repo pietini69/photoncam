@@ -169,6 +169,30 @@ pub fn tokenize_path_d(d: &str) -> Vec<PathToken> {
                 i += 1;
             }
             b'+' | b'-' | b'.' | b'0'..=b'9' => {
+                // If parsing an elliptical arc ('A' or 'a'), the 4th (large-arc) and 5th (sweep) parameters
+                // are single boolean flags ('0' or '1'). Support cases where flags are concatenated without spaces (e.g. "01").
+                let is_arc = matches!(tokens.last(), Some(PathToken::Cmd('A')) | Some(PathToken::Cmd('a')));
+                let mut num_tokens_since_arc = 0;
+                if !is_arc {
+                    for t in tokens.iter().rev() {
+                        if matches!(t, PathToken::Cmd('A') | PathToken::Cmd('a')) {
+                            break;
+                        } else if matches!(t, PathToken::Num(_)) {
+                            num_tokens_since_arc += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                let arc_sub_idx = num_tokens_since_arc % 7;
+                let is_arc_flag = (is_arc && arc_sub_idx == 3) || (num_tokens_since_arc > 0 && (arc_sub_idx == 3 || arc_sub_idx == 4));
+
+                if is_arc_flag && (b == b'0' || b == b'1') {
+                    tokens.push(PathToken::Num((b - b'0') as f64));
+                    i += 1;
+                    continue;
+                }
+
                 let start = i;
                 let mut has_dot = false;
                 let mut has_exp = false;
@@ -236,6 +260,116 @@ fn eval_quad_bezier(p0: Point2D, p1: Point2D, p2: Point2D, t: f64) -> Point2D {
         mt2 * p0.x + 2.0 * mt * t * p1.x + t2 * p2.x,
         mt2 * p0.y + 2.0 * mt * t * p1.y + t2 * p2.y,
     )
+}
+
+/// Tessellates an SVG elliptical arc into points following W3C SVG 1.1 Appendix F.6
+fn tessellate_elliptical_arc(
+    p0: Point2D,
+    mut rx: f64,
+    mut ry: f64,
+    x_axis_rotation_deg: f64,
+    large_arc_flag: bool,
+    sweep_flag: bool,
+    p_end: Point2D,
+    points: &mut Vec<Point2D>,
+) {
+    // F.6.2: If endpoint is identical to startpoint, no arc is drawn
+    if (p0.x - p_end.x).abs() < 1e-9 && (p0.y - p_end.y).abs() < 1e-9 {
+        return;
+    }
+
+    // F.6.2: If rx == 0 or ry == 0, treat as straight line segment to p_end
+    if rx.abs() < 1e-9 || ry.abs() < 1e-9 {
+        points.push(p_end);
+        return;
+    }
+
+    rx = rx.abs();
+    ry = ry.abs();
+
+    let phi = x_axis_rotation_deg.to_radians();
+    let cos_phi = phi.cos();
+    let sin_phi = phi.sin();
+
+    // Step 1: Compute (x1', y1')
+    let dx = (p0.x - p_end.x) * 0.5;
+    let dy = (p0.y - p_end.y) * 0.5;
+    let x1_prime = cos_phi * dx + sin_phi * dy;
+    let y1_prime = -sin_phi * dx + cos_phi * dy;
+
+    // Step 2: Ensure radii are large enough (F.6.6)
+    let mut rx_sq = rx * rx;
+    let mut ry_sq = ry * ry;
+    let x1_prime_sq = x1_prime * x1_prime;
+    let y1_prime_sq = y1_prime * y1_prime;
+
+    let lambda = (x1_prime_sq / rx_sq) + (y1_prime_sq / ry_sq);
+    if lambda > 1.0 {
+        let sqrt_lambda = lambda.sqrt();
+        rx *= sqrt_lambda;
+        ry *= sqrt_lambda;
+        rx_sq = rx * rx;
+        ry_sq = ry * ry;
+    }
+
+    // Step 3: Compute (cx', cy') (F.6.5)
+    let sign = if large_arc_flag == sweep_flag { -1.0 } else { 1.0 };
+    let num = (rx_sq * ry_sq) - (rx_sq * y1_prime_sq) - (ry_sq * x1_prime_sq);
+    let den = (rx_sq * y1_prime_sq) + (ry_sq * x1_prime_sq);
+    let factor = if den <= 1e-12 {
+        0.0
+    } else {
+        sign * (num.max(0.0) / den).sqrt()
+    };
+
+    let cx_prime = factor * (rx * y1_prime / ry);
+    let cy_prime = factor * (-ry * x1_prime / rx);
+
+    // Step 4: Compute center (cx, cy) in original coordinate system
+    let cx = cos_phi * cx_prime - sin_phi * cy_prime + (p0.x + p_end.x) * 0.5;
+    let cy = sin_phi * cx_prime + cos_phi * cy_prime + (p0.y + p_end.y) * 0.5;
+
+    // Step 5: Compute start angle theta1 and sweep angle delta_theta
+    let angle_between = |ux: f64, uy: f64, vx: f64, vy: f64| -> f64 {
+        let dot = ux * vx + uy * vy;
+        let len = ((ux * ux + uy * uy) * (vx * vx + vy * vy)).sqrt();
+        if len <= 1e-12 {
+            return 0.0;
+        }
+        let cos_val = (dot / len).clamp(-1.0, 1.0);
+        let s = if (ux * vy - uy * vx) < 0.0 { -1.0 } else { 1.0 };
+        s * cos_val.acos()
+    };
+
+    let v1x = (x1_prime - cx_prime) / rx;
+    let v1y = (y1_prime - cy_prime) / ry;
+    let v2x = (-x1_prime - cx_prime) / rx;
+    let v2y = (-y1_prime - cy_prime) / ry;
+
+    let theta1 = angle_between(1.0, 0.0, v1x, v1y);
+    let mut delta_theta = angle_between(v1x, v1y, v2x, v2y);
+
+    if !sweep_flag && delta_theta > 0.0 {
+        delta_theta -= 2.0 * std::f64::consts::PI;
+    } else if sweep_flag && delta_theta < 0.0 {
+        delta_theta += 2.0 * std::f64::consts::PI;
+    }
+
+    // Number of segments based on angular span and radius for smooth corners
+    let radius = rx.max(ry);
+    let arc_len = delta_theta.abs() * radius;
+    let steps = ((arc_len / 0.5).ceil() as usize).clamp(8, 64);
+
+    for step in 1..=steps {
+        let t = step as f64 / steps as f64;
+        let theta = theta1 + t * delta_theta;
+        let cos_theta = theta.cos();
+        let sin_theta = theta.sin();
+
+        let x = cos_phi * rx * cos_theta - sin_phi * ry * sin_theta + cx;
+        let y = sin_phi * rx * cos_theta + cos_phi * ry * sin_theta + cy;
+        points.push(Point2D::new(x, y));
+    }
 }
 
 /// Parses an SVG path `d` string into vector Polyline paths
@@ -552,14 +686,15 @@ pub fn parse_path_d(d: &str) -> Vec<Polyline> {
                                     Point2D::new(p0.x + coords[5], p0.y + coords[6])
                                 };
 
-                                // Approximate arc linear segments
-                                let steps = 12;
-                                for step in 1..=steps {
-                                    let t = step as f64 / steps as f64;
-                                    let mid_x = p0.x + (p_end.x - p0.x) * t;
-                                    let mid_y = p0.y + (p_end.y - p0.y) * t;
-                                    current_pts.push(Point2D::new(mid_x, mid_y));
-                                }
+                                let rx = coords[0];
+                                let ry = coords[1];
+                                let x_axis_rot = coords[2];
+                                let large_arc = coords[3] != 0.0;
+                                let sweep = coords[4] != 0.0;
+
+                                tessellate_elliptical_arc(
+                                    p0, rx, ry, x_axis_rot, large_arc, sweep, p_end, &mut current_pts,
+                                );
 
                                 current_pt = p_end;
                                 last_cubic_ctrl = None;
@@ -1100,5 +1235,23 @@ mod tests {
         let opt = crate::optimizer::CutOptimizer::new();
         let job = opt.optimize(&doc);
         assert!(job.paths.len() > 10, "Expected multiple hatch scan lines in job paths, got {}", job.paths.len());
+    }
+
+    #[test]
+    fn test_svg_elliptical_arc_rounded_corner() {
+        // SVG with rounded corner using A command: start (0, 10), arc to (10, 0) with radius 10
+        let d = "M 0 10 A 10 10 0 0 1 10 0 L 20 0";
+        let polys = parse_path_d(d);
+        assert_eq!(polys.len(), 1);
+        let pts = &polys[0].points;
+        assert!(pts.len() > 8, "Expected smooth arc approximation, got {} points", pts.len());
+
+        // The arc must be curved (NOT a straight diagonal line).
+        // At mid-angle (t ~ 0.5), a circle of radius 10 from (0,10) to (10,0) centered at (10,10)
+        // passes through x ~ 10 - 10*cos(45°) ~ 2.93, y ~ 10 - 10*sin(45°) ~ 2.93.
+        // A straight diagonal chord would pass through (5.0, 5.0) which is 2mm off!
+        let mid_pt = pts[pts.len() / 2];
+        let dist_from_center = ((mid_pt.x - 10.0).powi(2) + (mid_pt.y - 10.0).powi(2)).sqrt();
+        assert!((dist_from_center - 10.0).abs() < 0.2, "Arc midpoint should be on radius 10 circle (got dist {})", dist_from_center);
     }
 }
