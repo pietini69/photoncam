@@ -1,6 +1,6 @@
 [package]
 name = "photoncam"
-version = "1.2.9"
+version = "1.2.10"
 edition = "2021"
 authors = ["Niko Pietinen"]
 description = "PhotonCAM – Modern, high-performance laser cutting & engraving CAM software, featuring LightBurn .lbrn2 compatibility, vector optimization, image dithering, and multi-controller support (GRBL, Ruida)."

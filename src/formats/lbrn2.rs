@@ -429,22 +429,13 @@ impl Lbrn2File {
         }
 
         // 3. Recursively Parse Shapes (with group CutIndex inheritance)
-        let mirror_x = root
-            .attribute("MirrorX")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        let mirror_y = root
-            .attribute("MirrorY")
-            .map(|v| v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        Self::parse_shapes_recursive(root, Transform2D::default(), &shared_prims, &mut doc, None);
 
-        Self::parse_shapes_recursive(root, Transform2D::default(), &shared_prims, &mut doc, None, mirror_x, mirror_y);
-
-        // In LightBurn, MirrorY="True" indicates that the project was created with a Bottom-Left
-        // (Front-Left) machine origin, where coordinates are Cartesian with Y+ pointing up.
-        // Invert Y around the bounding box vertical center to preserve identical visual orientation
-        // on PhotonCAM's top-down canvas (matching DXF and PDF import behavior).
-        if mirror_y && !doc.shapes.is_empty() {
+        // In LightBurn, coordinates are stored in Cartesian space where Y+ points up.
+        // On PhotonCAM's top-down canvas (and standard screen coordinates where Y+ points down),
+        // we invert Y around the bounding box vertical center to preserve identical visual orientation
+        // as seen on LightBurn's display window, exactly matching DXF and PDF import behavior.
+        if !doc.shapes.is_empty() {
             let b = doc.bounds();
             let mid_y = b.min_y + b.height() * 0.5;
             for shape in &mut doc.shapes {
@@ -495,14 +486,12 @@ impl Lbrn2File {
         shared_prims: &HashMap<String, Vec<LbPrimCmd>>,
         doc: &mut Document,
         inherited_cut_index: Option<usize>,
-        mirror_x: bool,
-        mirror_y: bool,
     ) {
         for node in parent_node.children() {
             if !node.has_tag_name("Shape") {
                 // If it's a wrapper like <Children>, recurse through it
                 if node.tag_name().name().eq_ignore_ascii_case("Children") {
-                    Self::parse_shapes_recursive(node, parent_xform, shared_prims, doc, inherited_cut_index, mirror_x, mirror_y);
+                    Self::parse_shapes_recursive(node, parent_xform, shared_prims, doc, inherited_cut_index);
                 }
                 continue;
             }
@@ -536,7 +525,7 @@ impl Lbrn2File {
             match shape_type {
                 "Group" => {
                     // Recurse into children with current cumulative transform and cut_index
-                    Self::parse_shapes_recursive(node, cur_xform, shared_prims, doc, Some(cut_index), mirror_x, mirror_y);
+                    Self::parse_shapes_recursive(node, cur_xform, shared_prims, doc, Some(cut_index));
                 }
                 "Path" => {
                     // Check modern <VertList>
@@ -688,14 +677,7 @@ impl Lbrn2File {
                     {
                         if let Some(vl_node) = bp_node.children().find(|n| n.has_tag_name("VertList")) {
                             if let Some(vl_text) = vl_node.text() {
-                                let mut verts = parse_vert_list(vl_text);
-                                if !mirror_y {
-                                    for v in &mut verts {
-                                        v.pt.y = -v.pt.y;
-                                        v.c0.y = -v.c0.y;
-                                        v.c1.y = -v.c1.y;
-                                    }
-                                }
+                                let verts = parse_vert_list(vl_text);
                                 let prims = if let Some(pl_node) =
                                     bp_node.children().find(|n| n.has_tag_name("PrimList"))
                                 {
@@ -795,7 +777,7 @@ impl Lbrn2File {
                                     .points
                                     .iter()
                                     .map(|p| {
-                                        let py = if mirror_y { -p.y } else { p.y };
+                                        let py = -p.y;
                                         cur_xform.apply(Point2D::new(p.x, py + y_offset))
                                     })
                                     .collect();
