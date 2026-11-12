@@ -17,9 +17,9 @@
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleExecutable</key>
-    <string>photoncam</string>
+    <string>PhotonCAM</string>
     <key>CFBundleIconFile</key>
-    <string>icon.icns</string>
+    <string>photoncam.icns</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
