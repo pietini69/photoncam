@@ -3,6 +3,24 @@ use crate::Shape;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnclosurePreset {
+    /// Fully custom box dimensions
+    Custom,
+    /// Raspberry Pi 4 with 3.5" GPIO Touchscreen LCD (74x50mm screen cutout + ports)
+    RaspberryPi4WithDisplay35,
+    /// Raspberry Pi 4 Standard case (standoff holes + USB-C / micro-HDMI / USB / Ethernet ports)
+    RaspberryPi4Standard,
+    /// Raspberry Pi 5 Standard case (standoff holes + power / micro-HDMI / Ethernet / USB ports)
+    RaspberryPi5Standard,
+}
+
+impl Default for EnclosurePreset {
+    fn default() -> Self {
+        EnclosurePreset::Custom
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BoxLidType {
     /// Open top box without lid
     Open,
@@ -22,6 +40,9 @@ impl Default for BoxLidType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxMakerParams {
+    /// Device enclosure preset (or Custom for standard box)
+    #[serde(default)]
+    pub preset: EnclosurePreset,
     /// Outer width in mm (X axis)
     pub width: f64,
     /// Outer depth in mm (Y axis)
@@ -47,6 +68,7 @@ pub struct BoxMakerParams {
 impl Default for BoxMakerParams {
     fn default() -> Self {
         Self {
+            preset: EnclosurePreset::Custom,
             width: 100.0,
             depth: 80.0,
             height: 50.0,
@@ -77,6 +99,7 @@ pub struct BoxPart {
     pub width: f64,
     pub height: f64,
     pub polyline: Polyline,
+    pub cutouts: Vec<Shape>,
 }
 
 /// Generates a single finger-jointed edge between start and end.
@@ -210,6 +233,7 @@ pub fn generate_panel(
         width: w,
         height: h,
         polyline: Polyline::new(clean_pts, true),
+        cutouts: Vec::new(),
     }
 }
 
@@ -335,7 +359,166 @@ pub fn generate_box_parts(params: &BoxMakerParams) -> Vec<BoxPart> {
         }
     }
 
+    // 6. Apply Enclosure Presets (e.g. Raspberry Pi 4 + 3.5" Display)
+    match params.preset {
+        EnclosurePreset::Custom => {}
+        EnclosurePreset::RaspberryPi4WithDisplay35 => {
+            apply_rpi4_display35_cutouts(&mut parts, w, d, h, t);
+        }
+        EnclosurePreset::RaspberryPi4Standard => {
+            apply_rpi4_standard_cutouts(&mut parts, w, d, h, t);
+        }
+        EnclosurePreset::RaspberryPi5Standard => {
+            apply_rpi5_standard_cutouts(&mut parts, w, d, h, t);
+        }
+    }
+
     parts
+}
+
+fn apply_rpi4_display35_cutouts(parts: &mut [BoxPart], w: f64, d: f64, _h: f64, t: f64) {
+    let cx = w * 0.5;
+    let cy = d * 0.5;
+
+    // 1. Bottom panel: 4x M2.5 standoff holes (58.0 x 49.0 mm Raspberry Pi 4 pattern) + cooling vents
+    if let Some(bottom) = parts.iter_mut().find(|p| p.name.contains("Pohja") || p.name.contains("Bottom")) {
+        let hole_r = 1.35; // M2.5 clearance hole
+        let dx = 29.0;
+        let dy = 24.5;
+        bottom.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx - dx, cy - dy), radius: hole_r });
+        bottom.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx + dx, cy - dy), radius: hole_r });
+        bottom.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx + dx, cy + dy), radius: hole_r });
+        bottom.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx - dx, cy + dy), radius: hole_r });
+
+        // Passive cooling slots
+        for s in -2..=2 {
+            bottom.cutouts.push(Shape::Rect {
+                layer_index: 0,
+                x: cx - 18.0,
+                y: cy + (s as f64) * 6.0 - 1.2,
+                width: 36.0,
+                height: 2.4,
+                corner_radius: 1.2,
+            });
+        }
+    }
+
+    // 2. Lid panel: 3.5" GPIO Touchscreen viewing window (74.0 x 50.0 mm cutout)
+    if let Some(lid) = parts.iter_mut().find(|p| p.name.contains("Kansi") || p.name.contains("Lid")) {
+        lid.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: cx - 37.0,
+            y: cy - 25.0,
+            width: 74.0,
+            height: 50.0,
+            corner_radius: 2.0,
+        });
+    }
+
+    // 3. Front panel: USB-C power & micro-HDMI cutouts
+    if let Some(front) = parts.iter_mut().find(|p| p.name.contains("Etuseinä") || p.name.contains("Front")) {
+        // USB-C power
+        front.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: 10.0 + t,
+            y: 3.5 + t,
+            width: 11.0,
+            height: 6.5,
+            corner_radius: 2.0,
+        });
+        // Micro-HDMI 0 & 1
+        front.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: 25.5 + t,
+            y: 3.5 + t,
+            width: 9.5,
+            height: 5.5,
+            corner_radius: 1.5,
+        });
+        front.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: 40.0 + t,
+            y: 3.5 + t,
+            width: 9.5,
+            height: 5.5,
+            corner_radius: 1.5,
+        });
+        // 3.5mm Audio jack
+        front.cutouts.push(Shape::Circle {
+            layer_index: 0,
+            center: Point2D::new(54.0 + t, 6.5 + t),
+            radius: 3.5,
+        });
+    }
+
+    // 4. Right panel: USB-A ports & Ethernet RJ45
+    if let Some(right) = parts.iter_mut().find(|p| p.name.contains("Oikea") || p.name.contains("Right")) {
+        right.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: 6.0 + t,
+            y: 3.5 + t,
+            width: 16.0,
+            height: 16.5,
+            corner_radius: 1.0,
+        });
+        right.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: 25.0 + t,
+            y: 3.5 + t,
+            width: 16.0,
+            height: 16.5,
+            corner_radius: 1.0,
+        });
+        right.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: 44.0 + t,
+            y: 3.5 + t,
+            width: 16.5,
+            height: 14.5,
+            corner_radius: 1.0,
+        });
+    }
+
+    // 5. Left panel: MicroSD card slot cutout
+    if let Some(left) = parts.iter_mut().find(|p| p.name.contains("Vasen") || p.name.contains("Left")) {
+        left.cutouts.push(Shape::Rect {
+            layer_index: 0,
+            x: d * 0.5 - 7.0,
+            y: 1.5 + t,
+            width: 14.0,
+            height: 3.5,
+            corner_radius: 1.0,
+        });
+    }
+}
+
+fn apply_rpi4_standard_cutouts(parts: &mut [BoxPart], w: f64, d: f64, h: f64, t: f64) {
+    apply_rpi4_display35_cutouts(parts, w, d, h, t);
+    // For standard Pi without top screen, remove display cutout and add top fan vents
+    if let Some(lid) = parts.iter_mut().find(|p| p.name.contains("Kansi") || p.name.contains("Lid")) {
+        lid.cutouts.clear();
+        let cx = w * 0.5;
+        let cy = d * 0.5;
+        // 30mm cooling fan center hole (radius 14mm) + 4 corner screw holes (24mm spacing)
+        lid.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx, cy), radius: 14.0 });
+        let fd = 12.0;
+        lid.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx - fd, cy - fd), radius: 1.4 });
+        lid.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx + fd, cy - fd), radius: 1.4 });
+        lid.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx + fd, cy + fd), radius: 1.4 });
+        lid.cutouts.push(Shape::Circle { layer_index: 0, center: Point2D::new(cx - fd, cy + fd), radius: 1.4 });
+    }
+}
+
+fn apply_rpi5_standard_cutouts(parts: &mut [BoxPart], w: f64, d: f64, h: f64, t: f64) {
+    apply_rpi4_standard_cutouts(parts, w, d, h, t);
+    // Pi 5 specific: power button access hole on front panel
+    if let Some(front) = parts.iter_mut().find(|p| p.name.contains("Etuseinä") || p.name.contains("Front")) {
+        front.cutouts.push(Shape::Circle {
+            layer_index: 0,
+            center: Point2D::new(2.5 + t, 5.0 + t),
+            radius: 2.0,
+        });
+    }
 }
 
 /// Unpacks and arranges all box parts neatly into 2D canvas space starting at (start_x, start_y).
@@ -381,6 +564,14 @@ pub fn layout_box_shapes(
             polyline: Polyline::new(translated_points, true),
         });
 
+        // Translate and add all internal cutouts for ports, mounting holes, and display windows
+        for cutout in &part.cutouts {
+            let mut c = cutout.clone();
+            c.translate(offset_x, offset_y);
+            c.set_layer_index(layer_index);
+            shapes.push(c);
+        }
+
         cur_x += part_w + margin;
         if part_h > row_max_h {
             row_max_h = part_h;
@@ -397,6 +588,7 @@ mod tests {
     #[test]
     fn test_box_maker_generates_parts() {
         let params = BoxMakerParams {
+            preset: EnclosurePreset::Custom,
             width: 80.0,
             depth: 60.0,
             height: 40.0,
@@ -420,5 +612,42 @@ mod tests {
 
         let shapes = layout_box_shapes(&parts, 20.0, 20.0, 5.0, 0);
         assert_eq!(shapes.len(), 7);
+    }
+
+    #[test]
+    fn test_rpi4_display35_enclosure_preset() {
+        let params = BoxMakerParams {
+            preset: EnclosurePreset::RaspberryPi4WithDisplay35,
+            width: 95.0,
+            depth: 66.0,
+            height: 38.0,
+            thickness: 3.0,
+            tab_size: 10.0,
+            kerf: 0.08,
+            lid_type: BoxLidType::FingerJointLid,
+            dividers_x: 0,
+            dividers_y: 0,
+            layout_margin: 5.0,
+        };
+
+        let parts = generate_box_parts(&params);
+        assert_eq!(parts.len(), 6);
+
+        // Verify bottom has 4 standoff holes + cooling slots
+        let bottom = parts.iter().find(|p| p.name.contains("Bottom") || p.name.contains("Pohja")).unwrap();
+        assert!(bottom.cutouts.len() >= 9);
+
+        // Verify lid has the 74x50mm screen cutout
+        let lid = parts.iter().find(|p| p.name.contains("Lid") || p.name.contains("Kansi")).unwrap();
+        assert_eq!(lid.cutouts.len(), 1);
+        if let Shape::Rect { width, height, .. } = lid.cutouts[0] {
+            assert_eq!(width, 74.0);
+            assert_eq!(height, 50.0);
+        } else {
+            panic!("Expected rectangular screen cutout");
+        }
+
+        let shapes = layout_box_shapes(&parts, 10.0, 10.0, 5.0, 0);
+        assert!(shapes.len() >= 20);
     }
 }
