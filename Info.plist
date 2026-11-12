@@ -17,38 +17,20 @@
     <key>CFBundleSignature</key>
     <string>????</string>
     <key>CFBundleExecutable</key>
-    <string>PhotonCAM</string>
+    <string>photoncam</string>
     <key>CFBundleIconFile</key>
-    <string>photoncam.icns</string>
+    <string>icon.icns</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>NSRequiresAquaSystemAppearance</key>
+    <false/>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.13</string>
     <key>NSCameraUsageDescription</key>
-    <string>PhotonCAM uses your camera for live laser bed alignment, perspective calibration, and automatic workpiece detection.</string>
-    <key>CFBundleDocumentTypes</key>
-    <array>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>LightBurn Project</string>
-            <key>CFBundleTypeExtensions</key>
-            <array>
-                <string>lbrn2</string>
-                <string>lbrn</string>
-            </array>
-            <key>CFBundleTypeRole</key>
-            <string>Editor</string>
-        </dict>
-        <dict>
-            <key>CFBundleTypeName</key>
-            <string>Scalable Vector Graphics</string>
-            <key>CFBundleTypeExtensions</key>
-            <array>
-                <string>svg</string>
-            </array>
-            <key>CFBundleTypeRole</key>
-            <string>Viewer</string>
-        </dict>
-    </array>
+    <string>PhotonCAM needs camera access to capture laser workspace alignment images.</string>
 </dict>
 </plist>
