@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+pub mod camera;
+use camera::CameraBridge;
+
 const INDEX_HTML: &str = include_str!("web/index.html");
 const MANIFEST_JSON: &str = include_str!("web/manifest.json");
 
@@ -51,6 +54,7 @@ pub struct BridgeServer {
     pub loaded_gcode: Arc<Mutex<String>>,
     pub loaded_polylines: Arc<Mutex<Vec<Vec<(f64, f64)>>>>,
     pub loaded_filename: Arc<Mutex<String>>,
+    pub camera: Arc<CameraBridge>,
 }
 
 impl BridgeServer {
@@ -70,6 +74,7 @@ impl BridgeServer {
             loaded_gcode: Arc::new(Mutex::new(String::new())),
             loaded_polylines: Arc::new(Mutex::new(Vec::new())),
             loaded_filename: Arc::new(Mutex::new(String::new())),
+            camera: Arc::new(CameraBridge::default()),
         }
     }
 
@@ -202,8 +207,9 @@ impl BridgeServer {
                     let gcode_ref = Arc::clone(&self.loaded_gcode);
                     let poly_ref = Arc::clone(&self.loaded_polylines);
                     let fn_ref = Arc::clone(&self.loaded_filename);
+                    let cam_ref = Arc::clone(&self.camera);
                     thread::spawn(move || {
-                        handle_http_client(stream, dev, gcode_ref, poly_ref, fn_ref);
+                        handle_http_client(stream, dev, gcode_ref, poly_ref, fn_ref, cam_ref);
                     });
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -227,6 +233,7 @@ fn handle_http_client(
     loaded_gcode: Arc<Mutex<String>>,
     loaded_polylines: Arc<Mutex<Vec<Vec<(f64, f64)>>>>,
     loaded_filename: Arc<Mutex<String>>,
+    camera: Arc<CameraBridge>,
 ) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut reader = BufReader::new(stream.try_clone().unwrap());
@@ -306,6 +313,24 @@ fn handle_http_client(
             let ports = DeviceManager::scan_available_ports();
             let json = serde_json::json!({ "ports": ports }).to_string();
             send_response(&mut stream, 200, "application/json", json.as_bytes());
+        }
+        ("GET", p) if p.starts_with("/api/camera/snapshot") => {
+            let force = p.contains("force=1") || p.contains("fresh=1");
+            match camera.get_snapshot(force) {
+                Ok(jpeg) => send_response(&mut stream, 200, "image/jpeg", &jpeg),
+                Err(e) => {
+                    let err_json = serde_json::json!({ "error": e }).to_string();
+                    send_response(&mut stream, 500, "application/json", err_json.as_bytes());
+                }
+            }
+        }
+        ("GET", "/api/camera/status") => {
+            let status = camera.status();
+            let json = serde_json::to_string(&status).unwrap_or_else(|_| "{}".to_string());
+            send_response(&mut stream, 200, "application/json", json.as_bytes());
+        }
+        ("GET", "/api/camera/stream") => {
+            handle_camera_stream(stream, camera);
         }
         ("POST", "/api/jog") => {
             #[derive(Deserialize)]
@@ -697,6 +722,33 @@ fn handle_sse_stream(mut stream: TcpStream, device: Arc<Mutex<DeviceManager>>) {
     }
 }
 
+fn handle_camera_stream(mut stream: TcpStream, camera: Arc<CameraBridge>) {
+    let header = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nCache-Control: no-cache, no-store, must-revalidate\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+    if stream.write_all(header.as_bytes()).is_err() {
+        return;
+    }
+
+    loop {
+        if let Ok(jpeg) = camera.get_snapshot(false) {
+            let part_header = format!(
+                "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\n\r\n",
+                jpeg.len()
+            );
+            if stream.write_all(part_header.as_bytes()).is_err() {
+                break;
+            }
+            if stream.write_all(&jpeg).is_err() {
+                break;
+            }
+            if stream.write_all(b"\r\n").is_err() {
+                break;
+            }
+            let _ = stream.flush();
+        }
+        thread::sleep(Duration::from_millis(250)); // ~4 FPS streaming protects Pi CPU
+    }
+}
+
 fn get_status_report(device: &Arc<Mutex<DeviceManager>>) -> ServerStatusReport {
     let dm = device.lock().unwrap();
 
@@ -793,6 +845,18 @@ mod tests {
         assert!(INDEX_HTML.contains("bedCanvas"));
         assert!(INDEX_HTML.contains("apiPost('jog'"));
         assert!(MANIFEST_JSON.contains("PhotonCAM Web Remote"));
+    }
+
+    #[test]
+    fn test_server_camera_bridge() {
+        let server = BridgeServer::new(0, None);
+        let status = server.camera.status();
+        assert!(status.available);
+
+        let snap = server.camera.get_snapshot(false).expect("Server snapshot");
+        assert!(!snap.is_empty());
+        assert_eq!(snap[0], 0xFF);
+        assert_eq!(snap[1], 0xD8);
     }
 }
 

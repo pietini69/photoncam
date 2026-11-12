@@ -8,9 +8,17 @@ use nokhwa::pixel_format::{RgbAFormat, RgbFormat};
 use nokhwa::utils::{ApiBackend, CameraIndex, FrameFormat, RequestedFormat, RequestedFormatType};
 use nokhwa::Camera;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum CameraSource {
+    /// Local physical USB or UVC camera accessed via nokhwa
+    Local(CameraIndex),
+    /// Network HTTP snapshot or stream endpoint (e.g. Raspberry Pi running photoncam-bridge)
+    Network { url: String },
+}
+
 #[derive(Clone, Debug)]
 pub struct CameraDeviceItem {
-    pub index: CameraIndex,
+    pub source: CameraSource,
     pub name: String,
     pub description: String,
 }
@@ -448,11 +456,89 @@ impl LensUndistorter {
     }
 }
 
+/// Fast zero-dependency HTTP GET helper for fetching camera snapshots from Raspberry Pi
+pub fn http_get_bytes(url: &str, timeout: Duration) -> Result<Vec<u8>, String> {
+    let stripped = url.strip_prefix("http://").unwrap_or(url);
+    let (host_port, path) = match stripped.find('/') {
+        Some(idx) => (&stripped[..idx], &stripped[idx..]),
+        None => (stripped, "/"),
+    };
+
+    let (host, port) = if let Some(colon) = host_port.find(':') {
+        (&host_port[..colon], host_port[colon + 1..].parse::<u16>().unwrap_or(80))
+    } else {
+        (host_port, 80)
+    };
+
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let target = format!("{}:{}", host, port);
+    let socket_addr = target
+        .to_socket_addrs()
+        .map_err(|e| format!("Address lookup failed for '{}': {}", target, e))?
+        .next()
+        .ok_or_else(|| format!("No socket address for '{}'", target))?;
+
+    let mut stream = TcpStream::connect_timeout(&socket_addr, timeout)
+        .map_err(|e| format!("Connect to '{}' failed: {}", target, e))?;
+
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+
+    let req = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: PhotonCAM\r\nConnection: close\r\n\r\n",
+        path, host
+    );
+    stream
+        .write_all(req.as_bytes())
+        .map_err(|e| format!("Send error: {}", e))?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .map_err(|e| format!("Read status error: {}", e))?;
+
+    if !status_line.contains("200") {
+        return Err(format!("Server returned: {}", status_line.trim()));
+    }
+
+    let mut content_len = None;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+            break;
+        }
+        let lower = line.to_lowercase();
+        if lower.starts_with("content-length:") {
+            if let Some(val) = line.split(':').nth(1) {
+                content_len = val.trim().parse::<usize>().ok();
+            }
+        }
+    }
+
+    let mut body = Vec::new();
+    if let Some(len) = content_len {
+        body.resize(len, 0);
+        reader
+            .read_exact(&mut body)
+            .map_err(|e| format!("Read body error: {}", e))?;
+    } else {
+        reader
+            .read_to_end(&mut body)
+            .map_err(|e| format!("Read body error: {}", e))?;
+    }
+
+    Ok(body)
+}
+
 pub struct CameraManager {
     pub devices: Vec<CameraDeviceItem>,
     pub selected_device_idx: usize,
     pub is_streaming: bool,
     pub status_message: String,
+    pub network_camera_url: String,
     running: Arc<AtomicBool>,
     latest_frame: Arc<Mutex<Option<CameraFrame>>>,
     pub snapshot: Option<CameraFrame>,
@@ -466,6 +552,7 @@ impl Default for CameraManager {
             selected_device_idx: 0,
             is_streaming: false,
             status_message: "Ready. Select a camera to start.".to_string(),
+            network_camera_url: "http://photoncam.local:8080/api/camera/snapshot".to_string(),
             running: Arc::new(AtomicBool::new(false)),
             latest_frame: Arc::new(Mutex::new(None)),
             snapshot: None,
@@ -517,25 +604,55 @@ impl CameraManager {
                         human_name
                     };
                     self.devices.push(CameraDeviceItem {
-                        index: cam.index().clone(),
+                        source: CameraSource::Local(cam.index().clone()),
                         name: display_name,
                         description: desc,
                     });
                 }
-                if self.devices.is_empty() {
-                    self.status_message = "No camera devices detected.".to_string();
-                } else {
-                    self.status_message = format!("Found {} camera(s).", self.devices.len());
-                }
             }
             Err(e) => {
-                self.status_message = format!("Camera scan error: {}", e);
+                eprintln!("Camera scan warning: {}", e);
             }
         }
+
+        // Always register the Raspberry Pi / Network Bed Camera
+        self.devices.push(CameraDeviceItem {
+            source: CameraSource::Network {
+                url: self.network_camera_url.clone(),
+            },
+            name: "🍓 Raspberry Pi Bed Camera (Network)".to_string(),
+            description: format!("PhotonCAM Bridge HTTP snapshot at {}", self.network_camera_url),
+        });
+
+        self.status_message = format!("Found {} camera source(s).", self.devices.len());
 
         if self.selected_device_idx >= self.devices.len() {
             self.selected_device_idx = 0;
         }
+    }
+
+    pub fn set_network_url(&mut self, url: &str) {
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            self.network_camera_url = trimmed.to_string();
+            for d in &mut self.devices {
+                if let CameraSource::Network { ref mut url } = d.source {
+                    *url = self.network_camera_url.clone();
+                    d.description = format!("PhotonCAM Bridge HTTP snapshot at {}", self.network_camera_url);
+                }
+            }
+        }
+    }
+
+    pub fn selected_device(&self) -> Option<&CameraDeviceItem> {
+        self.devices.get(self.selected_device_idx)
+    }
+
+    pub fn is_network_camera_selected(&self) -> bool {
+        matches!(
+            self.selected_device().map(|d| &d.source),
+            Some(CameraSource::Network { .. })
+        )
     }
 
     pub fn start_stream(&mut self) {
@@ -560,119 +677,154 @@ impl CameraManager {
         let frame_slot = Arc::clone(&self.latest_frame);
         let device_name = device.name.clone();
 
-        self.worker_handle = Some(thread::spawn(move || {
-            let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
-            let mut camera = match Camera::new(device.index, requested) {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Failed to open camera: {}", e);
-                    running_flag.store(false, Ordering::SeqCst);
-                    return;
-                }
-            };
-
-            if let Err(e) = camera.open_stream() {
-                eprintln!("Failed to open camera stream: {}", e);
-                running_flag.store(false, Ordering::SeqCst);
-                return;
-            }
-
-            let mut frame_count: u64 = 0;
-            while running_flag.load(Ordering::SeqCst) {
-                match camera.frame() {
-                    Ok(buf) => {
-                        if !running_flag.load(Ordering::SeqCst) {
-                            break;
-                        }
-
-                        let res = buf.resolution();
-                        let w = res.width_x as usize;
-                        let h = res.height_y as usize;
-
-                        let mut final_w = res.width_x;
-                        let mut final_h = res.height_y;
-
-                        // 1. Fast path: YUYV format
-                        let rgba = if buf.source_frame_format() == FrameFormat::YUYV
-                            && buf.buffer().len() >= w * h * 2
-                        {
-                            fast_yuyv_to_rgba(buf.buffer(), w, h)
-                        } else if buf.source_frame_format() == FrameFormat::MJPEG
-                            || (buf.buffer().len() > 4 && buf.buffer().starts_with(&[0xFF, 0xD8]))
-                        {
-                            // 2. Pure Rust JPEG / MJPEG decoding via image crate (cross-platform, zero C deps)
-                            match image::load_from_memory_with_format(buf.buffer(), image::ImageFormat::Jpeg) {
-                                Ok(img) => {
-                                    final_w = img.width();
-                                    final_h = img.height();
-                                    img.to_rgba8().into_raw()
+        match device.source {
+            CameraSource::Network { url } => {
+                self.worker_handle = Some(thread::spawn(move || {
+                    let mut frame_count: u64 = 0;
+                    while running_flag.load(Ordering::SeqCst) {
+                        let fetch_url = if url.contains('?') {
+                            format!("{}&t={}", url, frame_count)
+                        } else {
+                            format!("{}?t={}", url, frame_count)
+                        };
+                        match http_get_bytes(&fetch_url, Duration::from_millis(2000)) {
+                            Ok(bytes) => {
+                                if let Ok(img) = image::load_from_memory(&bytes) {
+                                    let w = img.width();
+                                    let h = img.height();
+                                    let rgba = img.to_rgba8().into_raw();
+                                    frame_count += 1;
+                                    if let Ok(mut slot) = frame_slot.lock() {
+                                        *slot = Some(CameraFrame {
+                                            width: w,
+                                            height: h,
+                                            rgba,
+                                            frame_number: frame_count,
+                                        });
+                                    }
                                 }
-                                Err(e) => {
-                                    // Fallback to auto-detecting memory format
-                                    match image::load_from_memory(buf.buffer()) {
+                            }
+                            Err(_) => {
+                                thread::sleep(Duration::from_millis(200));
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(250)); // ~4 FPS streaming protects Pi CPU
+                    }
+                }));
+            }
+            CameraSource::Local(index) => {
+                self.worker_handle = Some(thread::spawn(move || {
+                    let requested = RequestedFormat::new::<RgbFormat>(RequestedFormatType::None);
+                    let mut camera = match Camera::new(index, requested) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Failed to open camera: {}", e);
+                            running_flag.store(false, Ordering::SeqCst);
+                            return;
+                        }
+                    };
+
+                    if let Err(e) = camera.open_stream() {
+                        eprintln!("Failed to open camera stream: {}", e);
+                        running_flag.store(false, Ordering::SeqCst);
+                        return;
+                    }
+
+                    let mut frame_count: u64 = 0;
+                    while running_flag.load(Ordering::SeqCst) {
+                        match camera.frame() {
+                            Ok(buf) => {
+                                if !running_flag.load(Ordering::SeqCst) {
+                                    break;
+                                }
+
+                                let res = buf.resolution();
+                                let w = res.width_x as usize;
+                                let h = res.height_y as usize;
+
+                                let mut final_w = res.width_x;
+                                let mut final_h = res.height_y;
+
+                                // 1. Fast path: YUYV format
+                                let rgba = if buf.source_frame_format() == FrameFormat::YUYV
+                                    && buf.buffer().len() >= w * h * 2
+                                {
+                                    fast_yuyv_to_rgba(buf.buffer(), w, h)
+                                } else if buf.source_frame_format() == FrameFormat::MJPEG
+                                    || (buf.buffer().len() > 4 && buf.buffer().starts_with(&[0xFF, 0xD8]))
+                                {
+                                    match image::load_from_memory_with_format(buf.buffer(), image::ImageFormat::Jpeg) {
                                         Ok(img) => {
                                             final_w = img.width();
                                             final_h = img.height();
                                             img.to_rgba8().into_raw()
                                         }
-                                        Err(err2) => {
-                                            eprintln!("Failed to decode camera JPEG frame ({} bytes): {}, fallback error: {}", buf.buffer().len(), e, err2);
-                                            Vec::new()
+                                        Err(e) => {
+                                            match image::load_from_memory(buf.buffer()) {
+                                                Ok(img) => {
+                                                    final_w = img.width();
+                                                    final_h = img.height();
+                                                    img.to_rgba8().into_raw()
+                                                }
+                                                Err(err2) => {
+                                                    eprintln!("Failed to decode camera JPEG frame ({} bytes): {}, fallback error: {}", buf.buffer().len(), e, err2);
+                                                    Vec::new()
+                                                }
+                                            }
                                         }
+                                    }
+                                } else {
+                                    buf.decode_image::<RgbAFormat>()
+                                        .map(|img| img.into_raw())
+                                        .or_else(|_| {
+                                            buf.decode_image::<RgbFormat>().map(|img| {
+                                                let raw = img.into_raw();
+                                                let mut out = Vec::with_capacity((w * h * 4) as usize);
+                                                for p in raw.chunks_exact(3) {
+                                                    out.extend_from_slice(&[p[0], p[1], p[2], 255]);
+                                                }
+                                                out
+                                            })
+                                        })
+                                        .or_else(|_| {
+                                            image::load_from_memory(buf.buffer()).map(|img| {
+                                                final_w = img.width();
+                                                final_h = img.height();
+                                                img.to_rgba8().into_raw()
+                                            })
+                                        })
+                                        .unwrap_or_default()
+                                };
+
+                                if !rgba.is_empty() {
+                                    frame_count += 1;
+                                    if frame_count == 1 {
+                                        log::info!("Camera streaming active: {}x{} (format: {:?})", final_w, final_h, buf.source_frame_format());
+                                    }
+                                    if let Ok(mut slot) = frame_slot.lock() {
+                                        *slot = Some(CameraFrame {
+                                            width: final_w,
+                                            height: final_h,
+                                            rgba,
+                                            frame_number: frame_count,
+                                        });
                                     }
                                 }
                             }
-                        } else {
-                            // 3. Fallback to nokhwa decoders, then image crate
-                            buf.decode_image::<RgbAFormat>()
-                                .map(|img| img.into_raw())
-                                .or_else(|_| {
-                                    buf.decode_image::<RgbFormat>().map(|img| {
-                                        let raw = img.into_raw();
-                                        let mut out = Vec::with_capacity((w * h * 4) as usize);
-                                        for p in raw.chunks_exact(3) {
-                                            out.extend_from_slice(&[p[0], p[1], p[2], 255]);
-                                        }
-                                        out
-                                    })
-                                })
-                                .or_else(|_| {
-                                    image::load_from_memory(buf.buffer()).map(|img| {
-                                        final_w = img.width();
-                                        final_h = img.height();
-                                        img.to_rgba8().into_raw()
-                                    })
-                                })
-                                .unwrap_or_default()
-                        };
+                            Err(e) => {
+                                if !running_flag.load(Ordering::SeqCst) {
+                                    break;
+                                }
+                                eprintln!("Camera frame error: {}", e);
+                                thread::sleep(Duration::from_millis(30));
+                            }
+                        }
+                    }
 
-                        if !rgba.is_empty() {
-                            frame_count += 1;
-                            if frame_count == 1 {
-                                log::info!("Camera streaming active: {}x{} (format: {:?})", final_w, final_h, buf.source_frame_format());
-                            }
-                            if let Ok(mut slot) = frame_slot.lock() {
-                                *slot = Some(CameraFrame {
-                                    width: final_w,
-                                    height: final_h,
-                                    rgba,
-                                    frame_number: frame_count,
-                                });
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        if !running_flag.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        eprintln!("Camera frame error: {}", e);
-                        thread::sleep(Duration::from_millis(30));
-                    }
-                }
+                    let _ = camera.stop_stream();
+                }));
             }
-
-            let _ = camera.stop_stream();
-        }));
+        }
 
         self.is_streaming = true;
         self.status_message = format!("Streaming from: {}", device_name);
@@ -706,6 +858,56 @@ impl CameraManager {
     }
 
     pub fn take_snapshot(&mut self) -> Option<CameraFrame> {
+        // If already streaming, return the latest frame received from the background thread
+        if self.is_streaming {
+            let frame = self.get_latest_frame();
+            if let Some(ref f) = frame {
+                self.snapshot = Some(f.clone());
+                self.status_message = format!("Snapshot captured ({}x{}).", f.width, f.height);
+            } else {
+                self.status_message = "No frame available from active stream.".to_string();
+            }
+            return frame;
+        }
+
+        // If not streaming and a network camera (e.g. Raspberry Pi) is selected, perform on-demand HTTP capture
+        if let Some(CameraSource::Network { ref url }) = self.selected_device().map(|d| &d.source) {
+            let fetch_url = if url.contains('?') {
+                format!("{}&force=1", url)
+            } else {
+                format!("{}?force=1", url)
+            };
+            self.status_message = format!("Fetching bed snapshot from Pi: {}...", url);
+            match http_get_bytes(&fetch_url, Duration::from_secs(4)) {
+                Ok(bytes) => {
+                    if let Ok(img) = image::load_from_memory(&bytes) {
+                        let w = img.width();
+                        let h = img.height();
+                        let rgba = img.to_rgba8().into_raw();
+                        let f = CameraFrame {
+                            width: w,
+                            height: h,
+                            rgba,
+                            frame_number: 1,
+                        };
+                        self.snapshot = Some(f.clone());
+                        if let Ok(mut slot) = self.latest_frame.lock() {
+                            *slot = Some(f.clone());
+                        }
+                        self.status_message = format!("Pi Bed snapshot fetched ({}x{}).", w, h);
+                        return Some(f);
+                    } else {
+                        self.status_message = "Failed to decode camera JPEG image.".to_string();
+                    }
+                }
+                Err(e) => {
+                    self.status_message = format!("Pi camera fetch error: {}", e);
+                }
+            }
+            return None;
+        }
+
+        // Default for local cameras: grab whatever is in the latest frame slot
         let frame = self.get_latest_frame();
         if let Some(ref f) = frame {
             self.snapshot = Some(f.clone());

@@ -453,6 +453,7 @@
     <div style="display: flex; align-items: center; gap: 8px;">
       <button class="win-btn" title="Ominaisuudet" onclick="toggleWin('propWindow')">📐</button>
       <button class="win-btn" title="Laserohjaus" onclick="toggleWin('jobWindow')">🎮</button>
+      <button class="win-btn" title="Pedin kamera" onclick="toggleCameraPanel()">📷</button>
       <button class="win-btn" title="Keskitys" onclick="resetView()">⟲</button>
       <button class="btn-estop" onclick="sendStop()">HÄTÄSEIS</button>
     </div>
@@ -469,6 +470,7 @@
     <button class="tool-btn" title="Living Hinge (Joustosarana)" onclick="openModal('hingeModal')">🌀</button>
     <button class="tool-btn" title="Vektori-QR-koodi" onclick="openModal('qrModal')">📱</button>
     <div class="tool-separator"></div>
+    <button class="tool-btn" title="Pedin kamera (RasPi)" onclick="toggleCameraPanel()">📷</button>
     <button class="tool-btn" title="Laserin ohjauspaneeli" onclick="toggleWin('jobWindow')">🎮</button>
   </div>
 
@@ -679,6 +681,35 @@
     </div>
   </div>
 
+  <!-- Floating Camera Bed Overlay Window -->
+  <div id="cameraWindow" class="floating-window" style="display: none; top: 70px; right: 20px; width: 280px; z-index: 100;">
+    <div class="floating-header" onmousedown="initDrag(event, 'cameraWindow')">
+      <span>📷 Pedin Kamera (RasPi)</span>
+      <div class="floating-actions">
+        <button class="win-btn" onclick="toggleCollapse('cameraWindow')">–</button>
+        <button class="win-btn" onclick="toggleWin('cameraWindow')">✕</button>
+      </div>
+    </div>
+    <div class="floating-body">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+        <label style="font-weight: bold; font-size: 13px; color: var(--text-primary); display: flex; align-items: center; gap: 6px;">
+          <input type="checkbox" id="camOverlayToggle" onchange="toggleCameraOverlay(this.checked)">
+          Näytä kankaalla
+        </label>
+        <button class="btn-primary" style="padding: 4px 10px; font-size: 12px;" onclick="refreshCameraSnapshot()">📸 Päivitä</button>
+      </div>
+      <div style="margin-bottom: 10px;">
+        <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">Läpinäkyvyys: <span id="camOpacityVal">70%</span></label>
+        <input type="range" min="10" max="100" value="70" style="width: 100%; accent-color: var(--cyan);" oninput="setCameraOpacity(this.value)">
+      </div>
+      <div style="display: flex; gap: 6px; margin-bottom: 8px;">
+        <button class="btn-secondary" id="camLiveBtn" style="flex: 1; font-size: 11px; padding: 6px;" onclick="toggleLiveCameraStream()">🔴 Live (Off)</button>
+        <button class="btn-secondary" style="flex: 1; font-size: 11px; padding: 6px;" onclick="openCameraStreamUrl()">🔗 Striimi</button>
+      </div>
+      <div id="camStatusInfo" style="font-size: 10px; color: var(--text-secondary); text-align: center;">Valmiina kuvaamaan.</div>
+    </div>
+  </div>
+
   <div class="canvas-hud">
     Pöytä: <span id="hudDims">400 × 400 mm</span> | Zoom: <span id="hudZoom">100%</span>
   </div>
@@ -693,6 +724,13 @@
     let jogStep = 10.0;
     let currentX = 0.0, currentY = 0.0;
     let weakLightOn = false;
+
+    // Camera Bed Overlay State
+    let cameraOverlayEnabled = false;
+    let cameraOpacity = 0.7;
+    let cameraImage = new Image();
+    let cameraLoaded = false;
+    let cameraLiveTimer = null;
 
     // Vector Canvas Geometry Shapes
     let shapes = [];
@@ -717,6 +755,68 @@
         apiPost('settings', { origin_corner: corner });
       }
       render();
+    }
+
+    // --- Camera Overlay Helpers ---
+    function toggleCameraPanel() {
+      toggleWin('cameraWindow');
+    }
+
+    function toggleCameraOverlay(enabled) {
+      cameraOverlayEnabled = enabled;
+      if (enabled && !cameraLoaded) {
+        refreshCameraSnapshot();
+      }
+      render();
+    }
+
+    function setCameraOpacity(val) {
+      cameraOpacity = val / 100.0;
+      const lbl = document.getElementById('camOpacityVal');
+      if (lbl) lbl.innerText = val + '%';
+      render();
+    }
+
+    function refreshCameraSnapshot() {
+      const statusEl = document.getElementById('camStatusInfo');
+      if (statusEl) statusEl.innerText = 'Haetaan kuvaa RasPilta...';
+      const img = new Image();
+      img.onload = () => {
+        cameraImage = img;
+        cameraLoaded = true;
+        cameraOverlayEnabled = true;
+        const toggle = document.getElementById('camOverlayToggle');
+        if (toggle) toggle.checked = true;
+        if (statusEl) statusEl.innerText = `Päivitetty (${img.width}x${img.height}) klo ${new Date().toLocaleTimeString()}`;
+        render();
+      };
+      img.onerror = () => {
+        if (statusEl) statusEl.innerText = 'Kameran haku epäonnistui. Tarkista yhteys.';
+      };
+      img.src = '/api/camera/snapshot?force=1&t=' + Date.now();
+    }
+
+    function toggleLiveCameraStream() {
+      const btn = document.getElementById('camLiveBtn');
+      if (cameraLiveTimer) {
+        clearInterval(cameraLiveTimer);
+        cameraLiveTimer = null;
+        if (btn) {
+          btn.innerText = '🔴 Live (Off)';
+          btn.style.color = '';
+        }
+      } else {
+        cameraLiveTimer = setInterval(refreshCameraSnapshot, 1000);
+        refreshCameraSnapshot();
+        if (btn) {
+          btn.innerText = '🟢 Live (On)';
+          btn.style.color = 'var(--green)';
+        }
+      }
+    }
+
+    function openCameraStreamUrl() {
+      window.open('/api/camera/stream', '_blank');
     }
 
     function updateOriginUI() {
@@ -896,6 +996,15 @@
       // Bed surface (working envelope)
       ctx.fillStyle = '#11131c';
       ctx.fillRect(panX, panY, bw, bh);
+
+      // Camera Overlay (draws camera photo aligned over bed envelope)
+      if (cameraOverlayEnabled && cameraLoaded) {
+        ctx.save();
+        ctx.globalAlpha = cameraOpacity;
+        ctx.drawImage(cameraImage, panX, panY, bw, bh);
+        ctx.restore();
+      }
+
       ctx.strokeStyle = '#2a324b';
       ctx.lineWidth = 1.5;
       ctx.strokeRect(panX, panY, bw, bh);

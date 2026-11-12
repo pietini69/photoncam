@@ -5,10 +5,10 @@ echo "=========================================="
 echo "  Configuring PhotonCAM OS on Raspberry Pi"
 echo "=========================================="
 
-# 1. Install prerequisites (avahi-daemon for .local mDNS discovery)
+# 1. Install prerequisites (avahi-daemon for .local mDNS discovery, camera utilities)
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y --no-install-recommends avahi-daemon udev libudev1
+apt-get install -y --no-install-recommends avahi-daemon udev libudev1 v4l-utils fswebcam
 
 # 2. Set Hostname to 'photoncam'
 echo "photoncam" > /etc/hostname

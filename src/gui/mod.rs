@@ -3602,6 +3602,15 @@ impl LaserBurnApp {
                 self.last_applied_calibration = None;
                 self.status_msg = "Bed overlay updated.".to_string();
             }
+        } else if self.camera_manager.is_network_camera_selected() {
+            if let Some(f) = self.camera_manager.take_snapshot() {
+                self.save_bed_snapshot_to_disk(&f);
+                self.last_raw_frame = Some(f);
+                self.last_applied_calibration = None;
+                self.status_msg = "Bed overlay updated from Raspberry Pi camera.".to_string();
+            } else {
+                self.status_msg = self.camera_manager.status_message.clone();
+            }
         } else {
             let initial = self.camera_manager.get_latest_frame().map(|f| f.frame_number).unwrap_or(0);
             self.camera_manager.start_stream();
@@ -9083,6 +9092,27 @@ impl eframe::App for LaserBurnApp {
                             self.camera_manager.refresh_devices();
                         }
                     });
+
+                    // Row 1b: Network Camera Pi Configuration (when Network source is chosen)
+                    if self.camera_manager.is_network_camera_selected() {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("Pi URL:").strong());
+                            let mut url = self.camera_manager.network_camera_url.clone();
+                            if ui.add(egui::TextEdit::singleline(&mut url).desired_width(260.0)).changed() {
+                                self.camera_manager.set_network_url(&url);
+                            }
+
+                            if let Some(addr) = crate::device::parse_network_port(&self.device.selected_port) {
+                                let host = addr.split(':').next().unwrap_or("photoncam.local");
+                                let auto_url = format!("http://{}:8080/api/camera/snapshot", host);
+                                if auto_url != self.camera_manager.network_camera_url {
+                                    if ui.button("📍 Use Laser Pi IP").on_hover_text(format!("Set to {}", auto_url)).clicked() {
+                                        self.camera_manager.set_network_url(&auto_url);
+                                    }
+                                }
+                            }
+                        });
+                    }
 
                     // Row 2: Stream Controls & Status
                     let c_green = self.color_green();
