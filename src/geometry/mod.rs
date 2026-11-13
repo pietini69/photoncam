@@ -161,6 +161,14 @@ impl BoundingBox {
     pub fn contains_point(&self, p: &Point2D) -> bool {
         p.x >= self.min_x && p.x <= self.max_x && p.y >= self.min_y && p.y <= self.max_y
     }
+
+    /// Returns true if this bounding box completely contains the other bounding box
+    pub fn contains_bounds(&self, other: &BoundingBox) -> bool {
+        self.min_x <= other.min_x + 1e-6
+            && self.max_x >= other.max_x - 1e-6
+            && self.min_y <= other.min_y + 1e-6
+            && self.max_y >= other.max_y - 1e-6
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -242,6 +250,26 @@ impl Polyline {
 
     pub fn reverse(&mut self) {
         self.points.reverse();
+    }
+
+    /// For closed polylines, rotates the vertex order so that it begins at the vertex closest to `target`.
+    /// This drastically minimizes rapid non-cutting transit time for laser jobs.
+    pub fn rotate_start_to_closest_vertex(&mut self, target: Point2D) {
+        if !self.is_closed || self.points.len() < 3 {
+            return;
+        }
+        let mut best_idx = 0;
+        let mut min_dist_sq = f64::INFINITY;
+        for (i, p) in self.points.iter().enumerate() {
+            let d = p.distance_squared_to(&target);
+            if d < min_dist_sq {
+                min_dist_sq = d;
+                best_idx = i;
+            }
+        }
+        if best_idx > 0 {
+            self.points.rotate_left(best_idx);
+        }
     }
 
     pub fn contains_point(&self, p: &Point2D) -> bool {

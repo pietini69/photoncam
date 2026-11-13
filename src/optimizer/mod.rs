@@ -11,6 +11,8 @@ pub struct OptimizedPath {
     pub layer_index: usize,
     pub polyline: Polyline,
     pub is_inner_cut: bool,
+    pub nesting_depth: usize,
+    pub cut_order_index: usize,
     pub powers: Option<Vec<f64>>,
     pub z_level: Option<f64>,
 }
@@ -77,6 +79,8 @@ impl CutOptimizer {
                                 layer_index: layer_idx,
                                 polyline: poly,
                                 is_inner_cut: false,
+                                nesting_depth: 0,
+                                cut_order_index: 0,
                                 powers,
                                 z_level: z,
                             }
@@ -87,6 +91,8 @@ impl CutOptimizer {
                                 layer_index: layer_idx,
                                 polyline: poly,
                                 is_inner_cut: false,
+                                nesting_depth: 0,
+                                cut_order_index: 0,
                                 powers,
                                 z_level: None,
                             }
@@ -100,6 +106,8 @@ impl CutOptimizer {
                         layer_index: layer_idx,
                         polyline: p,
                         is_inner_cut: false,
+                        nesting_depth: 0,
+                        cut_order_index: 0,
                         powers: None,
                         z_level: None,
                     }).collect()
@@ -108,6 +116,8 @@ impl CutOptimizer {
                         layer_index: layer_idx,
                         polyline: p,
                         is_inner_cut: false,
+                        nesting_depth: 0,
+                        cut_order_index: 0,
                         powers: None,
                         z_level: None,
                     }).collect()
@@ -117,6 +127,8 @@ impl CutOptimizer {
                     layer_index: layer_idx,
                     polyline: p,
                     is_inner_cut: false,
+                    nesting_depth: 0,
+                    cut_order_index: 0,
                     powers: None,
                     z_level: None,
                 }).collect()
@@ -149,24 +161,24 @@ impl CutOptimizer {
                 continue;
             }
 
-            // Step 2a: Classify inner vs outer contours for vector cuts
+            // Step 2a: Classify inner vs outer contours & nesting depth for vector cuts
             let mut classified: Vec<OptimizedPath> = Vec::with_capacity(items.len());
             for i in 0..items.len() {
-                let is_inner = if self.inner_cuts_first && items[i].polyline.is_closed {
-                    // Check if items[i] is contained inside any other closed polygon in the layer
-                    let mut contained = false;
+                let mut nesting_depth = 0;
+                if self.inner_cuts_first && items[i].polyline.is_closed {
+                    let i_bounds = items[i].polyline.bounds();
                     if let Some(test_pt) = items[i].polyline.points.first() {
                         for (j, item) in items.iter().enumerate() {
-                            if i != j && item.polyline.is_closed && item.polyline.contains_point(test_pt) {
-                                contained = true;
-                                break;
+                            if i != j && item.polyline.is_closed {
+                                let j_bounds = item.polyline.bounds();
+                                if j_bounds.contains_bounds(&i_bounds) && item.polyline.contains_point(test_pt) {
+                                    nesting_depth += 1;
+                                }
                             }
                         }
                     }
-                    contained
-                } else {
-                    false
-                };
+                }
+                let is_inner = nesting_depth > 0;
 
                 let layer_opt = doc.layers.get(&items[i].layer_index);
                 let is_vector_line = layer_opt.map_or(true, |l| l.cut_setting.mode == crate::document::CutMode::Line);
@@ -186,24 +198,15 @@ impl CutOptimizer {
                     layer_index: items[i].layer_index,
                     polyline: poly,
                     is_inner_cut: is_inner,
+                    nesting_depth,
+                    cut_order_index: 0,
                     powers: items[i].powers.clone(),
                     z_level: items[i].z_level,
                 });
             }
 
-            // Step 2b: Sort so inner cuts come before outer cuts
-            if self.inner_cuts_first {
-                classified.sort_by(|a, b| {
-                    match (a.is_inner_cut, b.is_inner_cut) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => std::cmp::Ordering::Equal,
-                    }
-                });
-            }
-
-            // Step 2c: Nearest-Neighbor TSP optimization for rapid travel (vector layers only)
-            if self.minimize_travel && classified.len() > 1 {
+            // Step 2b & 2c: Hierarchical Nesting (Deepest holes first) & Nearest-Neighbor TSP
+            if classified.len() > 1 {
                 let mut remaining = classified;
                 let mut reordered: Vec<OptimizedPath> = Vec::with_capacity(remaining.len());
 
@@ -212,11 +215,15 @@ impl CutOptimizer {
                     let mut best_dist_sq = f64::INFINITY;
                     let mut should_reverse = false;
 
-                    // When inner_cuts_first is enabled, only consider inner cuts until all inner cuts are cut
-                    let has_inner = self.inner_cuts_first && remaining.iter().any(|p| p.is_inner_cut);
+                    // When inner_cuts_first is enabled, only consider items at the deepest nesting depth remaining
+                    let max_depth = if self.inner_cuts_first {
+                        remaining.iter().map(|p| p.nesting_depth).max().unwrap_or(0)
+                    } else {
+                        0
+                    };
 
                     for (idx, item) in remaining.iter().enumerate() {
-                        if has_inner && !item.is_inner_cut {
+                        if self.inner_cuts_first && item.nesting_depth < max_depth {
                             continue;
                         }
 
@@ -225,7 +232,13 @@ impl CutOptimizer {
                             continue;
                         }
 
-                        let start_dist = current_laser_pos.distance_squared_to(&pts[0]);
+                        // For closed paths, find distance to the closest vertex
+                        let start_dist = if item.polyline.is_closed {
+                            pts.iter().map(|p| current_laser_pos.distance_squared_to(p)).fold(f64::INFINITY, f64::min)
+                        } else {
+                            current_laser_pos.distance_squared_to(&pts[0])
+                        };
+
                         if start_dist < best_dist_sq {
                             best_dist_sq = start_dist;
                             best_idx = idx;
@@ -249,6 +262,9 @@ impl CutOptimizer {
                         if let Some(ref mut p) = chosen.powers {
                             p.reverse();
                         }
+                    } else if chosen.polyline.is_closed {
+                        // Start closed polyline cut at the vertex closest to current laser position
+                        chosen.polyline.rotate_start_to_closest_vertex(current_laser_pos);
                     }
 
                     if let Some(last_pt) = chosen.polyline.points.last() {
@@ -275,6 +291,8 @@ impl CutOptimizer {
                             layer_index: path.layer_index,
                             polyline: seg,
                             is_inner_cut: path.is_inner_cut,
+                            nesting_depth: path.nesting_depth,
+                            cut_order_index: 0,
                             powers: None,
                             z_level: path.z_level,
                         });
@@ -286,6 +304,11 @@ impl CutOptimizer {
             classified = tabbed_paths;
 
             final_paths.extend(classified);
+        }
+
+        // Final Step: Assign 1-based sequential cut order indices across all paths
+        for (idx, p) in final_paths.iter_mut().enumerate() {
+            p.cut_order_index = idx + 1;
         }
 
         OptimizedJob { paths: final_paths }
@@ -593,5 +616,64 @@ mod tests {
         assert!(gcode.contains("G0 Z2.000"), "G-code should retract to clearance Z to prevent collisions");
         assert!(gcode.contains("(3D Relief Z"), "G-code should annotate 3D relief passes");
         assert!(gcode.contains("G0 Z-"), "G-code should plunge to negative Z depths for slices");
+    }
+
+    #[test]
+    fn test_nested_inner_cuts_order_deepest_first() {
+        let mut doc = Document::new("nested_cut_test", 200.0, 200.0);
+        let layer = doc.get_or_create_layer(0);
+        layer.cut_setting.mode = crate::document::CutMode::Line;
+        layer.cut_setting.speed = 10.0;
+        layer.cut_setting.power_max = 80.0;
+
+        // Shape 1: Outermost square (100x100) from (0,0) to (100,100) -> depth 0
+        let p_outer = Polyline::new(vec![
+            Point2D::new(0.0, 0.0),
+            Point2D::new(100.0, 0.0),
+            Point2D::new(100.0, 100.0),
+            Point2D::new(0.0, 100.0),
+        ], true);
+
+        // Shape 2: Middle hole (60x60) from (20,20) to (80,80) -> depth 1
+        let p_middle = Polyline::new(vec![
+            Point2D::new(20.0, 20.0),
+            Point2D::new(80.0, 20.0),
+            Point2D::new(80.0, 80.0),
+            Point2D::new(20.0, 80.0),
+        ], true);
+
+        // Shape 3: Innermost island/hole (20x20) from (40,40) to (60,60) -> depth 2
+        let p_inner = Polyline::new(vec![
+            Point2D::new(40.0, 40.0),
+            Point2D::new(60.0, 40.0),
+            Point2D::new(60.0, 60.0),
+            Point2D::new(40.0, 60.0),
+        ], true);
+
+        // Push shapes in arbitrary order (outer first, then middle, then inner)
+        doc.shapes.push(crate::document::Shape::Path { layer_index: 0, polyline: p_outer });
+        doc.shapes.push(crate::document::Shape::Path { layer_index: 0, polyline: p_middle });
+        doc.shapes.push(crate::document::Shape::Path { layer_index: 0, polyline: p_inner });
+
+        let mut opt = CutOptimizer::new();
+        opt.inner_cuts_first = true;
+        opt.minimize_travel = true;
+        let job = opt.optimize(&doc);
+
+        assert_eq!(job.paths.len(), 3);
+        // Cut 0 must be innermost (depth 2)
+        assert_eq!(job.paths[0].nesting_depth, 2);
+        assert!(job.paths[0].is_inner_cut);
+        assert_eq!(job.paths[0].cut_order_index, 1);
+
+        // Cut 1 must be middle hole (depth 1)
+        assert_eq!(job.paths[1].nesting_depth, 1);
+        assert!(job.paths[1].is_inner_cut);
+        assert_eq!(job.paths[1].cut_order_index, 2);
+
+        // Cut 2 must be outermost contour (depth 0)
+        assert_eq!(job.paths[2].nesting_depth, 0);
+        assert!(!job.paths[2].is_inner_cut);
+        assert_eq!(job.paths[2].cut_order_index, 3);
     }
 }

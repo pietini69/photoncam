@@ -256,6 +256,16 @@ pub struct DeviceSettings {
     #[serde(default = "default_homing_speed")]
     pub homing_speed: f64,         // Homing / switch test seek speed mm/min (default 400.0)
 
+    // Cut Path Optimization Settings
+    #[serde(default = "default_true")]
+    pub opt_inner_cuts_first: bool,  // Deepest nested holes and internal cutouts cut before outer perimeter
+    #[serde(default = "default_true")]
+    pub opt_minimize_travel: bool,   // Nearest-neighbor TSP rapid travel optimization
+    #[serde(default = "default_true")]
+    pub opt_allow_reversal: bool,    // Allow direction reversal on open toolpaths to save rapid travel
+    #[serde(default)]
+    pub opt_show_cut_order: bool,    // Show sequential numbered badges (1, 2, 3...) in simulation & canvas
+
     // Connection
     pub default_port: String,
     pub default_baud: u32,
@@ -576,6 +586,11 @@ impl Default for DeviceSettings {
             jog_speed: 3000.0,
             frame_speed: 4000.0,
             homing_speed: 400.0,
+
+            opt_inner_cuts_first: true,
+            opt_minimize_travel: true,
+            opt_allow_reversal: true,
+            opt_show_cut_order: false,
 
             default_port: "".to_string(),
             default_baud: 115200,

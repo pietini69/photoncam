@@ -101,6 +101,7 @@ pub struct PreviewMove {
 #[derive(Debug, Clone)]
 pub struct PreviewJobData {
     pub moves: Vec<PreviewMove>,
+    pub path_starts: Vec<(Point2D, usize, bool, usize)>, // (start_pos, cut_order_index, is_inner_cut, nesting_depth)
     pub total_time_sec: f64,
     pub total_cut_distance: f64,
     pub total_rapid_distance: f64,
@@ -108,13 +109,23 @@ pub struct PreviewJobData {
 }
 
 impl PreviewJobData {
-    pub fn build(doc: &Document, default_kerf: f64) -> Self {
+    pub fn build(
+        doc: &Document,
+        default_kerf: f64,
+        inner_cuts_first: bool,
+        minimize_travel: bool,
+        allow_reversal: bool,
+    ) -> Self {
         let mut opt = CutOptimizer::new();
         opt.default_kerf = default_kerf;
+        opt.inner_cuts_first = inner_cuts_first;
+        opt.minimize_travel = minimize_travel;
+        opt.allow_reversal = allow_reversal;
         let job = opt.optimize(doc);
 
         let sim = crate::simulator::Simulator::default();
         let mut moves = Vec::new();
+        let mut path_starts = Vec::new();
         let mut current_pos = Point2D::ZERO;
         let mut current_time = 0.0;
         let mut total_cut_distance = 0.0;
@@ -140,6 +151,8 @@ impl PreviewJobData {
             if pts.len() < 2 {
                 continue;
             }
+
+            path_starts.push((pts[0], path.cut_order_index, path.is_inner_cut, path.nesting_depth));
 
             // Rapid move to start of path
             let rapid_dist = current_pos.distance_to(&pts[0]);
@@ -211,6 +224,7 @@ impl PreviewJobData {
 
         Self {
             moves,
+            path_starts,
             total_time_sec: current_time.max(0.001),
             total_cut_distance,
             total_rapid_distance,
@@ -437,6 +451,7 @@ pub struct LaserBurnApp {
     pub mat_test_max_power: f64,
     pub mat_test_box_size: f64,
     pub mat_test_is_engrave: bool,
+    pub mat_test_speed_in_mm_min: bool,
 
     // Engraving Depth Test Generator Window State
     pub show_depth_test_window: bool,
@@ -637,12 +652,13 @@ impl Default for LaserBurnApp {
             show_material_test_window: ui_layout.show_material_test_window,
             mat_test_rows: 5,
             mat_test_cols: 5,
-            mat_test_min_speed: 20.0,
-            mat_test_max_speed: 100.0,
-            mat_test_min_power: 15.0,
-            mat_test_max_power: 95.0,
+            mat_test_min_speed: 10.0,
+            mat_test_max_speed: 60.0,
+            mat_test_min_power: 20.0,
+            mat_test_max_power: 100.0,
             mat_test_box_size: 10.0,
             mat_test_is_engrave: true,
+            mat_test_speed_in_mm_min: false,
 
             show_depth_test_window: ui_layout.show_depth_test_window,
             depth_test_type: DepthTestType::MultiPass,
@@ -1179,12 +1195,14 @@ impl LaserBurnApp {
         let box_sz = self.mat_test_box_size.clamp(4.0, 40.0);
         let gap = (box_sz * 0.30).max(2.5);
 
+        let unit_str = if self.mat_test_speed_in_mm_min { "mm/min" } else { "mm/s" };
         let min_spd = self.mat_test_min_speed.min(self.mat_test_max_speed).max(1.0);
         let max_spd = self.mat_test_max_speed.max(self.mat_test_min_speed).max(1.0);
         let min_pwr = self.mat_test_min_power.min(self.mat_test_max_power).clamp(1.0, 100.0);
         let max_pwr = self.mat_test_max_power.max(self.mat_test_min_power).clamp(1.0, 100.0);
 
-        let start_x = 35.0;
+        let label_margin = if self.mat_test_speed_in_mm_min { 44.0 } else { 32.0 };
+        let start_x = 10.0 + label_margin;
         let start_y = 32.0;
 
         let mut new_sel = Vec::new();
@@ -1200,9 +1218,9 @@ impl LaserBurnApp {
         }
 
         let title_str = if self.mat_test_is_engrave {
-            format!("MATERIAL TEST (GRAYSCALE / CERAMIC) {:.0}-{:.0}% | {:.0}-{:.0}mm/s", min_pwr, max_pwr, min_spd, max_spd)
+            format!("MATERIAL TEST (ENGRAVE) {:.0}-{:.0}% | {:.0}-{:.0} {}", min_pwr, max_pwr, min_spd, max_spd, unit_str)
         } else {
-            format!("CUT TEST {:.0}-{:.0}% | {:.0}-{:.0}mm/s", min_pwr, max_pwr, min_spd, max_spd)
+            format!("CUT TEST {:.0}-{:.0}% | {:.0}-{:.0} {}", min_pwr, max_pwr, min_spd, max_spd, unit_str)
         };
         if let Ok(polys) = crate::text::generate_text_polylines(&crate::text::TextOptions {
             text: title_str,
@@ -1251,7 +1269,7 @@ impl LaserBurnApp {
             }
         }
 
-        // Rows (Speed mm/s)
+        // Rows (Speed)
         for r in 0..rows {
             let t_row = if rows > 1 { r as f64 / (rows - 1) as f64 } else { 0.0 };
             let spd = min_spd + t_row * (max_spd - min_spd);
@@ -1259,10 +1277,10 @@ impl LaserBurnApp {
 
             // Row label on left
             if let Ok(polys) = crate::text::generate_text_polylines(&crate::text::TextOptions {
-                text: format!("{:.0}mm/s", spd),
+                text: format!("{:.0} {}", spd, unit_str),
                 font_type: crate::text::FontType::SingleLine,
                 font_size_mm: (box_sz * 0.30).clamp(2.5, 4.8),
-                x: (start_x - 26.0).max(2.0),
+                x: (start_x - label_margin + 2.0).max(2.0),
                 y: ry + box_sz * 0.65,
                 align: crate::text::TextAlign::Left,
                 letter_spacing: 1.0,
@@ -1278,16 +1296,18 @@ impl LaserBurnApp {
                 }
             }
 
+            let internal_spd = if self.mat_test_speed_in_mm_min { spd / 60.0 } else { spd };
+
             if self.mat_test_is_engrave {
                 // Use 1 layer per row (speed) configured as GrayscalePower (0%..100%) so all columns in this row
                 // burn at the exact row speed with each column's exact analog PWM power!
                 let layer_idx = (r + 1).min(29);
                 let l = self.doc.get_or_create_layer(layer_idx);
-                l.name = format!("Row {} ({:.0} mm/s)", r + 1, spd);
+                l.name = format!("Row {} ({:.0} {})", r + 1, spd, unit_str);
                 l.output = true;
                 l.cut_setting.mode = CutMode::Image;
                 l.cut_setting.dither_mode = DitherMode::GrayscalePower;
-                l.cut_setting.speed = spd;
+                l.cut_setting.speed = internal_spd;
                 l.cut_setting.power_min = 0.0;
                 l.cut_setting.power_max = 100.0;
                 l.cut_setting.invert_image = false;
@@ -1335,10 +1355,10 @@ impl LaserBurnApp {
                     let cx = start_x + c as f64 * (box_sz + gap);
                     let layer_idx = ((r * cols + c) % 29) + 1;
                     let l = self.doc.get_or_create_layer(layer_idx);
-                    l.name = format!("{:.0}mm/s {:.0}%", spd, pwr);
+                    l.name = format!("{:.0} {} {:.0}%", spd, unit_str, pwr);
                     l.output = true;
                     l.cut_setting.mode = CutMode::Line;
-                    l.cut_setting.speed = spd;
+                    l.cut_setting.speed = internal_spd;
                     l.cut_setting.power_max = pwr;
 
                     self.doc.add_shape(Shape::Rect {
@@ -1358,8 +1378,8 @@ impl LaserBurnApp {
         self.image_textures.clear();
         self.doc_version = self.doc_version.wrapping_add(1);
         self.status_msg = format!(
-            "Generated {}x{} Material Test Matrix ({:.0}-{:.0}% Power, {:.0}-{:.0} mm/s Speed)",
-            rows, cols, min_pwr, max_pwr, min_spd, max_spd
+            "Generated {}x{} Material Test Matrix ({:.0}-{:.0}% Power, {:.0}-{:.0} {} Speed)",
+            rows, cols, min_pwr, max_pwr, min_spd, max_spd, unit_str
         );
     }
 
@@ -3775,6 +3795,9 @@ impl LaserBurnApp {
 
         let mut opt = CutOptimizer::new();
         opt.default_kerf = self.device.settings.default_kerf;
+        opt.inner_cuts_first = self.device.settings.opt_inner_cuts_first;
+        opt.minimize_travel = self.device.settings.opt_minimize_travel;
+        opt.allow_reversal = self.device.settings.opt_allow_reversal;
         let job = opt.optimize(&self.doc);
 
         let mut cfg = GCodeConfig::default();
@@ -4524,7 +4547,13 @@ impl LaserBurnApp {
         let tr = |k| crate::i18n::t(k, lang);
 
         if self.preview_job.is_none() || self.preview_job_version != self.doc_version {
-            self.preview_job = Some(PreviewJobData::build(&self.doc, self.device.settings.default_kerf));
+            self.preview_job = Some(PreviewJobData::build(
+                &self.doc,
+                self.device.settings.default_kerf,
+                self.device.settings.opt_inner_cuts_first,
+                self.device.settings.opt_minimize_travel,
+                self.device.settings.opt_allow_reversal,
+            ));
             self.preview_job_version = self.doc_version;
         }
 
@@ -4624,6 +4653,25 @@ impl LaserBurnApp {
                         .small()
                         .weak(),
                     );
+                });
+
+                // Optimization Controls Toolbar
+                ui.horizontal(|ui| {
+                    let mut recompute = false;
+                    if ui.checkbox(&mut self.device.settings.opt_inner_cuts_first, tr("Inner Cuts First"))
+                        .on_hover_text("Cut nested holes and inside contours before outer perimeters").changed() {
+                        recompute = true;
+                    }
+                    if ui.checkbox(&mut self.device.settings.opt_minimize_travel, tr("Minimize Travel (TSP)"))
+                        .on_hover_text("Sort paths with nearest-neighbor search and rotate closed cut starts to minimize rapid non-cutting moves").changed() {
+                        recompute = true;
+                    }
+                    ui.checkbox(&mut self.device.settings.opt_show_cut_order, tr("Show Cut Order Badges"))
+                        .on_hover_text("Display numbered 1, 2, 3... sequence badges at toolpath start locations");
+
+                    if recompute {
+                        self.preview_job = None;
+                    }
                 });
 
                 ui.separator();
@@ -4743,6 +4791,28 @@ impl LaserBurnApp {
                         [egui::pos2(head_pos.x, head_pos.y - 7.0), egui::pos2(head_pos.x, head_pos.y + 7.0)],
                         egui::Stroke::new(1.0_f32, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180)),
                     );
+
+                    // Render Cut Order Badges if enabled
+                    if self.device.settings.opt_show_cut_order {
+                        for (start_pt, order_idx, is_inner, _depth) in &job.path_starts {
+                            let badge_pos = to_scr(*start_pt);
+                            let bg_color = if *is_inner {
+                                egui::Color32::from_rgb(235, 120, 20) // Orange/Amber for inner holes
+                            } else {
+                                egui::Color32::from_rgb(30, 140, 230) // Blue for outer perimeters
+                            };
+                            let radius = if *order_idx < 10 { 7.5 } else if *order_idx < 100 { 9.0 } else { 11.0 };
+                            painter.circle_filled(badge_pos, radius, bg_color);
+                            painter.circle_stroke(badge_pos, radius, egui::Stroke::new(1.0_f32, egui::Color32::WHITE));
+                            painter.text(
+                                badge_pos,
+                                egui::Align2::CENTER_CENTER,
+                                format!("{}", order_idx),
+                                egui::FontId::monospace(10.0),
+                                egui::Color32::WHITE,
+                            );
+                        }
+                    }
 
                     // Coordinate readout
                     let coord_text = format!("X: {:.1} mm  Y: {:.1} mm", laser_head.x, laser_head.y);
@@ -5221,6 +5291,9 @@ impl eframe::App for LaserBurnApp {
                     };
                     let mut opt = CutOptimizer::new();
                     opt.default_kerf = self.device.settings.default_kerf;
+                    opt.inner_cuts_first = self.device.settings.opt_inner_cuts_first;
+                    opt.minimize_travel = self.device.settings.opt_minimize_travel;
+                    opt.allow_reversal = self.device.settings.opt_allow_reversal;
                     let job = opt.optimize(&self.doc);
                     let gen = GCodeGenerator::new(GCodeConfig::default());
                     let gcode = gen.generate(&self.doc, &job);
@@ -5238,6 +5311,9 @@ impl eframe::App for LaserBurnApp {
                     };
                     let mut opt = CutOptimizer::new();
                     opt.default_kerf = self.device.settings.default_kerf;
+                    opt.inner_cuts_first = self.device.settings.opt_inner_cuts_first;
+                    opt.minimize_travel = self.device.settings.opt_minimize_travel;
+                    opt.allow_reversal = self.device.settings.opt_allow_reversal;
                     let job = opt.optimize(&self.doc);
                     let gen = RuidaGenerator::new();
                     let bytes = gen.generate_rd(&self.doc, &job);
@@ -7992,7 +8068,7 @@ impl eframe::App for LaserBurnApp {
             let mut close_mat = false;
             let mut do_gen_mat = false;
             let mut is_open = true;
-            let (def_pos, def_size) = self.window_pos_size("material_test_dialog", [170.0, 75.0], [390.0, 480.0]);
+            let (def_pos, def_size) = self.window_pos_size("material_test_dialog", [170.0, 75.0], [450.0, 520.0]);
 
             let resp = egui::Window::new(tr("Material Test Generator"))
                 .id(egui::Id::new("material_test_dialog"))
@@ -8010,11 +8086,70 @@ impl eframe::App for LaserBurnApp {
                     );
                     ui.add_space(6.0);
 
+                    // Quick presets
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Presets:").strong());
+                        if ui.button("Slow Cut (10-40)").clicked() {
+                            self.mat_test_is_engrave = false;
+                            self.mat_test_speed_in_mm_min = false;
+                            self.mat_test_min_speed = 10.0;
+                            self.mat_test_max_speed = 40.0;
+                            self.mat_test_min_power = 60.0;
+                            self.mat_test_max_power = 100.0;
+                            self.mat_test_rows = 4;
+                            self.mat_test_cols = 5;
+                        }
+                        if ui.button("Standard Cut (20-80)").clicked() {
+                            self.mat_test_is_engrave = false;
+                            self.mat_test_speed_in_mm_min = false;
+                            self.mat_test_min_speed = 20.0;
+                            self.mat_test_max_speed = 80.0;
+                            self.mat_test_min_power = 50.0;
+                            self.mat_test_max_power = 100.0;
+                            self.mat_test_rows = 5;
+                            self.mat_test_cols = 5;
+                        }
+                        if ui.button("Fast Engrave (50-250)").clicked() {
+                            self.mat_test_is_engrave = true;
+                            self.mat_test_speed_in_mm_min = false;
+                            self.mat_test_min_speed = 50.0;
+                            self.mat_test_max_speed = 250.0;
+                            self.mat_test_min_power = 10.0;
+                            self.mat_test_max_power = 90.0;
+                            self.mat_test_rows = 5;
+                            self.mat_test_cols = 5;
+                        }
+                    });
+
+                    ui.add_space(4.0);
+
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Test Mode:").strong());
-                        ui.radio_value(&mut self.mat_test_is_engrave, true, "Engrave / Ceramic Paint (Grayscale PWM)");
+                        ui.radio_value(&mut self.mat_test_is_engrave, true, "Engrave (Grayscale PWM)");
                         ui.radio_value(&mut self.mat_test_is_engrave, false, "Vector Cut (Line)");
                     });
+
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Speed Unit:").strong());
+                        if ui.radio_value(&mut self.mat_test_speed_in_mm_min, false, "mm/s").clicked() {
+                            if self.mat_test_min_speed > 300.0 {
+                                self.mat_test_min_speed = (self.mat_test_min_speed / 60.0).max(10.0);
+                                self.mat_test_max_speed = (self.mat_test_max_speed / 60.0).max(10.0);
+                            }
+                        }
+                        if ui.radio_value(&mut self.mat_test_speed_in_mm_min, true, "mm/min").clicked() {
+                            if self.mat_test_min_speed < 100.0 {
+                                self.mat_test_min_speed *= 60.0;
+                                self.mat_test_max_speed *= 60.0;
+                            }
+                        }
+                    });
+
+                    let (spd_suffix, spd_step, spd_range) = if self.mat_test_speed_in_mm_min {
+                        (" mm/min", 50.0, 100.0..=60000.0)
+                    } else {
+                        (" mm/s", 1.0, 5.0..=1000.0)
+                    };
 
                     ui.add_space(4.0);
                     egui::Grid::new("mat_test_params_grid")
@@ -8032,9 +8167,9 @@ impl eframe::App for LaserBurnApp {
                             ui.end_row();
 
                             ui.label("Min Speed:");
-                            ui.add(egui::DragValue::new(&mut self.mat_test_min_speed).speed(1.0).range(1.0..=1000.0).suffix(" mm/s"));
+                            ui.add(egui::DragValue::new(&mut self.mat_test_min_speed).speed(spd_step).range(spd_range.clone()).suffix(spd_suffix));
                             ui.label("Max Speed:");
-                            ui.add(egui::DragValue::new(&mut self.mat_test_max_speed).speed(1.0).range(1.0..=1000.0).suffix(" mm/s"));
+                            ui.add(egui::DragValue::new(&mut self.mat_test_max_speed).speed(spd_step).range(spd_range).suffix(spd_suffix));
                             ui.end_row();
 
                             ui.label("Min Power:");
@@ -8915,6 +9050,17 @@ impl eframe::App for LaserBurnApp {
                     ui.checkbox(&mut self.device.settings.auto_connect, tr("Auto-connect to laser port on startup"));
                     ui.checkbox(&mut self.device.settings.enable_camera_support, tr("Enable Camera & Alignment Features"))
                         .on_hover_text("Uncheck this if your machine does not have an overhead USB camera to hide all camera buttons and menus for a clean, distraction-free interface.");
+
+                    ui.add_space(8.0);
+                    ui.separator();
+
+                    ui.label(egui::RichText::new(tr("Cut Path Optimization & Ordering:")).strong());
+                    ui.checkbox(&mut self.device.settings.opt_inner_cuts_first, tr("Cut Inside Holes First (Nesting Depth)"))
+                        .on_hover_text("Always cuts interior holes and innermost cutouts before outer boundary contours to prevent parts from shifting");
+                    ui.checkbox(&mut self.device.settings.opt_minimize_travel, tr("Minimize Rapid Travel (TSP Solver)"))
+                        .on_hover_text("Optimizes path sequence using nearest-neighbor search and rotates closed toolpaths to drastically cut down idle transit time");
+                    ui.checkbox(&mut self.device.settings.opt_allow_reversal, tr("Allow Open Toolpath Reversal"))
+                        .on_hover_text("Reverses cut direction on open curves if starting closer to current laser position");
 
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -10407,6 +10553,18 @@ mod tests {
         app.generate_material_test_grid();
         assert!(app.doc.shapes.len() > 12, "Material test grid should create cells and text labels");
 
+        // Test Material Test in mm/min mode
+        app.doc.shapes.clear();
+        app.mat_test_speed_in_mm_min = true;
+        app.mat_test_min_speed = 600.0;
+        app.mat_test_max_speed = 2400.0;
+        app.mat_test_is_engrave = false;
+        app.generate_material_test_grid();
+        assert!(app.doc.shapes.len() > 12);
+        assert!(app.status_msg.contains("mm/min"));
+        let l1 = app.doc.layers.get(&1).expect("Layer 1 should exist");
+        assert!((l1.cut_setting.speed - 10.0).abs() < 1e-4, "Feedrate in mm/min should convert internally to mm/s");
+
         // 4. Test Image Preprocess & Ceramic Preview
         let gray = vec![0.0f32, 0.25, 0.5, 0.75, 1.0, 0.5, 0.25, 0.75, 0.5];
         let processed = crate::dither::preprocess_grayscale(&gray, 3, 3, 10.0, 20.0, 1.2, 0.5);
@@ -10911,11 +11069,14 @@ mod tests {
         doc.add_shape(Shape::Rect { layer_index: 0, x: 20.0, y: 20.0, width: 40.0, height: 40.0, corner_radius: 0.0 });
         doc.add_shape(Shape::Circle { layer_index: 0, center: Point2D::new(100.0, 100.0), radius: 15.0 });
 
-        let job_data = PreviewJobData::build(&doc, 0.0);
+        let job_data = PreviewJobData::build(&doc, 0.0, true, true, true);
         assert!(!job_data.moves.is_empty(), "Moves must not be empty");
         assert!(job_data.total_time_sec > 0.0, "Total time must be greater than zero");
         assert!(job_data.total_cut_distance > 0.0, "Total cut distance must be positive");
         assert!(job_data.total_rapid_distance > 0.0, "Total rapid distance must be positive");
+        assert_eq!(job_data.path_starts.len(), 2, "Must record path start positions for cut ordering badges");
+        assert_eq!(job_data.path_starts[0].1, 1, "First path must have cut order 1");
+        assert_eq!(job_data.path_starts[1].1, 2, "Second path must have cut order 2");
 
         let cut_moves = job_data.moves.iter().filter(|m| m.is_cut).count();
         let rapid_moves = job_data.moves.iter().filter(|m| !m.is_cut).count();
