@@ -2805,17 +2805,14 @@ impl LaserBurnApp {
             .filter(|&i| i < self.doc.shapes.len())
             .collect();
 
-        // Allow self-union on a single Group (e.g. overlapping text / grouped shapes)
+        // Allow self-union / weld on a single Group (e.g. overlapping text / grouped shapes)
         if valid_indices.len() == 1 && op == crate::geometry::BooleanOp::Union {
             let idx = valid_indices[0];
             if let Shape::Group { ref shapes, locked, layer_index } = self.doc.shapes[idx].clone() {
                 if shapes.len() >= 2 {
                     self.push_undo();
-                    let mut acc = shapes[0].to_polylines();
-                    for s in &shapes[1..] {
-                        let b = s.to_polylines();
-                        acc = crate::geometry::boolean_op_polylines(&acc, &b, crate::geometry::BooleanOp::Union);
-                    }
+                    let all_polys = self.doc.shapes[idx].to_polylines();
+                    let acc = crate::geometry::weld_polylines(&all_polys);
                     if !acc.is_empty() {
                         let new_shape = if acc.len() == 1 {
                             Shape::Path {
@@ -2860,11 +2857,20 @@ impl LaserBurnApp {
         });
 
         if any_closed || op != crate::geometry::BooleanOp::Union {
-            let mut acc = self.doc.shapes[first_idx].to_polylines();
-            for &idx in &valid_indices[1..] {
-                let b_polys = self.doc.shapes[idx].to_polylines();
-                acc = crate::geometry::boolean_op_polylines(&acc, &b_polys, op);
-            }
+            let acc = if op == crate::geometry::BooleanOp::Union {
+                let mut all_polys = Vec::new();
+                for &idx in &valid_indices {
+                    all_polys.extend(self.doc.shapes[idx].to_polylines());
+                }
+                crate::geometry::weld_polylines(&all_polys)
+            } else {
+                let mut acc = self.doc.shapes[first_idx].to_polylines();
+                for &idx in &valid_indices[1..] {
+                    let b_polys = self.doc.shapes[idx].to_polylines();
+                    acc = crate::geometry::boolean_op_polylines(&acc, &b_polys, op);
+                }
+                acc
+            };
 
             // Remove original selected shapes in descending index order
             let mut to_remove = valid_indices.clone();

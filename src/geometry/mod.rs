@@ -162,6 +162,12 @@ impl BoundingBox {
         p.x >= self.min_x && p.x <= self.max_x && p.y >= self.min_y && p.y <= self.max_y
     }
 
+    /// Returns true if this bounding box intersects with the other bounding box
+    pub fn intersects(&self, other: &BoundingBox) -> bool {
+        self.min_x <= other.max_x && self.max_x >= other.min_x
+            && self.min_y <= other.max_y && self.max_y >= other.min_y
+    }
+
     /// Returns true if this bounding box completely contains the other bounding box
     pub fn contains_bounds(&self, other: &BoundingBox) -> bool {
         self.min_x <= other.min_x + 1e-6
@@ -1045,6 +1051,108 @@ pub fn boolean_op_polylines(
     result
 }
 
+/// Welds / unions a collection of closed polylines (such as cursive text or overlapping shapes),
+/// preserving all inner holes (counters) and outer contours without filling in letter holes.
+pub fn weld_polylines(polys: &[Polyline]) -> Vec<Polyline> {
+    if polys.len() <= 1 {
+        return polys.to_vec();
+    }
+
+    let mut closed_polys = Vec::new();
+    let mut open_polys = Vec::new();
+
+    for p in polys {
+        if p.is_closed && p.points.len() >= 3 {
+            closed_polys.push(p.clone());
+        } else {
+            open_polys.push(p.clone());
+        }
+    }
+
+    if closed_polys.is_empty() {
+        return polys.to_vec();
+    }
+
+    // 1. Classify closed polylines into outers and holes by nesting depth
+    let n = closed_polys.len();
+    let mut depths = vec![0usize; n];
+    for i in 0..n {
+        let p0 = closed_polys[i].points[0];
+        let p1 = closed_polys[i].points[1];
+        let test_pt = Point2D::new(0.5 * (p0.x + p1.x), 0.5 * (p0.y + p1.y));
+        let mut d = 0usize;
+        for j in 0..n {
+            if i != j && closed_polys[j].contains_point(&test_pt) {
+                d += 1;
+            }
+        }
+        depths[i] = d;
+    }
+
+    let mut outers: Vec<Polyline> = Vec::new();
+    let mut holes: Vec<Polyline> = Vec::new();
+
+    for i in 0..n {
+        if depths[i] % 2 == 0 {
+            outers.push(closed_polys[i].clone());
+        } else {
+            holes.push(closed_polys[i].clone());
+        }
+    }
+
+    // Optimization: Check if any outer contours overlap with each other
+    let any_outers_overlap = outers.len() > 1 && {
+        let bboxes: Vec<_> = outers.iter().map(|p| p.bounds()).collect();
+        let mut overlap = false;
+        'outer_check: for i in 0..outers.len() {
+            for j in (i + 1)..outers.len() {
+                if bboxes[i].intersects(&bboxes[j]) {
+                    overlap = true;
+                    break 'outer_check;
+                }
+            }
+        }
+        overlap
+    };
+
+    // If no outer contours overlap (such as normal printed text), nothing needs welding!
+    // Returning the original polylines untouched preserves perfect original glyph geometry.
+    if !any_outers_overlap {
+        return polys.to_vec();
+    }
+
+    // 2. Union overlapping outers together
+    let mut unioned_outers: Vec<Polyline> = Vec::new();
+    for o in outers {
+        if unioned_outers.is_empty() {
+            unioned_outers = vec![o];
+        } else {
+            unioned_outers = boolean_op_polylines(&unioned_outers, &[o], BooleanOp::Union);
+        }
+    }
+
+    // 3. If there are no holes, return unioned outers + open polys
+    if holes.is_empty() {
+        unioned_outers.extend(open_polys);
+        return unioned_outers;
+    }
+
+    // 4. Union holes together if multiple holes overlap
+    let mut unioned_holes: Vec<Polyline> = Vec::new();
+    for h in holes {
+        if unioned_holes.is_empty() {
+            unioned_holes = vec![h];
+        } else {
+            unioned_holes = boolean_op_polylines(&unioned_holes, &[h], BooleanOp::Union);
+        }
+    }
+
+    // 5. Subtract the unioned holes from the unioned outers
+    let mut result = boolean_op_polylines(&unioned_outers, &unioned_holes, BooleanOp::Subtract);
+    result.extend(open_polys);
+    result
+}
+
 /// Evaluates a Cubic Bezier curve at parameter t in [0.0, 1.0]
 pub fn eval_cubic_bezier(p0: Point2D, p1: Point2D, p2: Point2D, p3: Point2D, t: f64) -> Point2D {
     let u = 1.0 - t;
@@ -1193,5 +1301,69 @@ mod tests {
         assert!((ib.width() - 5.0).abs() < 1e-2);
         assert!((ib.height() - 5.0).abs() < 1e-2);
         assert!((inter[0].signed_area().abs() - 25.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_weld_polylines_with_holes_and_non_overlapping() {
+        // Outer square 20x20 with inner hole 10x10 (like an 'O')
+        let outer_o = Polyline::new(
+            vec![
+                Point2D::new(0.0, 0.0),
+                Point2D::new(20.0, 0.0),
+                Point2D::new(20.0, 20.0),
+                Point2D::new(0.0, 20.0),
+            ],
+            true,
+        );
+        let hole_o = Polyline::new(
+            vec![
+                Point2D::new(5.0, 5.0),
+                Point2D::new(5.0, 15.0),
+                Point2D::new(15.0, 15.0),
+                Point2D::new(15.0, 5.0),
+            ],
+            true,
+        );
+
+        // A second non-overlapping shape at x=30 (like another letter)
+        let outer_2 = Polyline::new(
+            vec![
+                Point2D::new(30.0, 0.0),
+                Point2D::new(40.0, 0.0),
+                Point2D::new(40.0, 20.0),
+                Point2D::new(30.0, 20.0),
+            ],
+            true,
+        );
+
+        let polys = vec![outer_o, hole_o, outer_2];
+        let welded = weld_polylines(&polys);
+
+        // Because outer_o and outer_2 do not overlap, all 3 polylines (including the hole!) must be preserved
+        assert_eq!(welded.len(), 3, "Non-overlapping shapes must preserve all contours and holes");
+
+        // Now test overlapping cursive shapes with holes:
+        // Overlap a rectangle across the outer_o at x=15..25 (touches outer_o but doesn't touch the hole at 5..15)
+        let overlap_rect = Polyline::new(
+            vec![
+                Point2D::new(15.0, 8.0),
+                Point2D::new(30.0, 8.0),
+                Point2D::new(30.0, 12.0),
+                Point2D::new(15.0, 12.0),
+            ],
+            true,
+        );
+
+        let polys_overlap = vec![
+            Polyline::new(vec![Point2D::new(0.0, 0.0), Point2D::new(20.0, 0.0), Point2D::new(20.0, 20.0), Point2D::new(0.0, 20.0)], true),
+            Polyline::new(vec![Point2D::new(5.0, 5.0), Point2D::new(5.0, 15.0), Point2D::new(15.0, 15.0), Point2D::new(15.0, 5.0)], true),
+            overlap_rect,
+        ];
+        let welded_overlap = weld_polylines(&polys_overlap);
+
+        // Must produce 1 unioned outer contour and 1 preserved inner hole = 2 polylines!
+        assert_eq!(welded_overlap.len(), 2, "Overlapping weld must produce 1 unioned outer and 1 hole");
+        let has_hole = welded_overlap.iter().any(|p| p.signed_area() < 0.0 || (p.signed_area().abs() - 100.0).abs() < 1.0);
+        assert!(has_hole, "Inner hole must be preserved after weld");
     }
 }
