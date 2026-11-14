@@ -2,7 +2,40 @@
 //! Supports both TrueType/OpenType outline fonts and single-line stroke fonts for laser cutting and engraving.
 
 use crate::geometry::{Point2D, Polyline};
+use std::borrow::Cow;
 use std::path::Path;
+
+// Embedded Google Handwriting Fonts for Wood Engraving & Laser Cutting
+pub static FONT_CAVEAT: &[u8] = include_bytes!("../../assets/fonts/Caveat.ttf");
+pub static FONT_KALAM: &[u8] = include_bytes!("../../assets/fonts/Kalam.ttf");
+pub static FONT_SATISFY: &[u8] = include_bytes!("../../assets/fonts/Satisfy.ttf");
+pub static FONT_PATRICK_HAND: &[u8] = include_bytes!("../../assets/fonts/PatrickHand.ttf");
+pub static FONT_ALEX_BRUSH: &[u8] = include_bytes!("../../assets/fonts/AlexBrush.ttf");
+
+/// Load font bytes from either an embedded font identifier ("embedded:Caveat", etc.)
+/// or a file system path.
+pub fn load_font_bytes(path_or_id: &str) -> Result<Cow<'static, [u8]>, String> {
+    if path_or_id.is_empty() {
+        let def = default_system_font();
+        if !def.is_empty() && Path::new(&def).exists() {
+            return load_font_bytes(&def);
+        }
+        return Ok(Cow::Borrowed(FONT_CAVEAT));
+    }
+
+    match path_or_id {
+        "embedded:Caveat" | "Caveat" => Ok(Cow::Borrowed(FONT_CAVEAT)),
+        "embedded:Kalam" | "Kalam" => Ok(Cow::Borrowed(FONT_KALAM)),
+        "embedded:Satisfy" | "Satisfy" => Ok(Cow::Borrowed(FONT_SATISFY)),
+        "embedded:PatrickHand" | "Patrick Hand" | "PatrickHand" => Ok(Cow::Borrowed(FONT_PATRICK_HAND)),
+        "embedded:AlexBrush" | "Alex Brush" | "AlexBrush" => Ok(Cow::Borrowed(FONT_ALEX_BRUSH)),
+        path => {
+            let data = std::fs::read(path)
+                .map_err(|e| format!("Failed to read font file '{}': {}", path, e))?;
+            Ok(Cow::Owned(data))
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FontType {
@@ -67,12 +100,19 @@ pub fn default_system_font() -> String {
         }
     }
 
-    "".to_string()
+    "embedded:Caveat".to_string()
 }
 
-/// List available system fonts
+/// List available system fonts, featuring embedded Google handwriting fonts for wood engraving
 pub fn available_system_fonts() -> Vec<(&'static str, &'static str)> {
-    let mut fonts = Vec::new();
+    let mut fonts = vec![
+        // Handwriting / Puukaiverrus Google Fonts (Embedded, cross-platform)
+        ("✍ Caveat (Luonnollinen käsiala / Puukaiverrus)", "embedded:Caveat"),
+        ("✍ Kalam (Rento käsiala / Ainesosat & Mitat)", "embedded:Kalam"),
+        ("✍ Satisfy (Perinteinen kaunokirjoitus / Otsikot)", "embedded:Satisfy"),
+        ("✍ Patrick Hand (Selkeä tekstaus / Äidin reseptit)", "embedded:PatrickHand"),
+        ("✍ Alex Brush (Koristeellinen kaunokirjoitus)", "embedded:AlexBrush"),
+    ];
     let candidates = [
         ("Arial", "/System/Library/Fonts/Supplemental/Arial.ttf"),
         ("Arial Bold", "/System/Library/Fonts/Supplemental/Arial Bold.ttf"),
@@ -305,8 +345,7 @@ fn generate_ttf_on_path(
     on_path: &TextOnPathOptions,
     path_len: f64,
 ) -> Result<Vec<Polyline>, String> {
-    let font_bytes = std::fs::read(font_path)
-        .map_err(|e| format!("Failed to read font file '{}': {}", font_path, e))?;
+    let font_bytes = load_font_bytes(font_path)?;
 
     let face = ttf_parser::Face::parse(&font_bytes, 0)
         .map_err(|e| format!("Failed to parse font file: {:?}", e))?;
@@ -379,8 +418,7 @@ fn generate_ttf_on_path(
 }
 
 fn generate_ttf_polylines(options: &TextOptions, font_path: &str) -> Result<Vec<Polyline>, String> {
-    let font_bytes = std::fs::read(font_path)
-        .map_err(|e| format!("Failed to read font file '{}': {}", font_path, e))?;
+    let font_bytes = load_font_bytes(font_path)?;
 
     let face = ttf_parser::Face::parse(&font_bytes, 0)
         .map_err(|e| format!("Failed to parse font file: {:?}", e))?;
@@ -822,5 +860,37 @@ mod tests {
 
         let polylines = generate_text_on_path(&opt, &arc_path, &on_path).expect("Text on path must succeed");
         assert!(!polylines.is_empty(), "Must generate polylines along arc");
+    }
+
+    #[test]
+    fn test_embedded_google_handwriting_fonts() {
+        let recipe_text = "Mummon mustikkapiirakka:\n2 dl sokeria, 3 munaa, 100g voita.\nÄidin herkkuresepti & öljyä!";
+        let embedded_fonts = [
+            ("Caveat", "embedded:Caveat"),
+            ("Kalam", "embedded:Kalam"),
+            ("Satisfy", "embedded:Satisfy"),
+            ("PatrickHand", "embedded:PatrickHand"),
+            ("AlexBrush", "embedded:AlexBrush"),
+        ];
+
+        for (name, font_id) in embedded_fonts {
+            let opt = TextOptions {
+                text: recipe_text.to_string(),
+                font_type: FontType::TrueType { path: font_id.to_string() },
+                font_size_mm: 14.0,
+                x: 10.0,
+                y: 10.0,
+                align: TextAlign::Left,
+                letter_spacing: 1.15,
+                line_spacing: 1.3,
+            };
+
+            let polylines = generate_text_polylines(&opt)
+                .unwrap_or_else(|e| panic!("Font '{}' failed vectorization: {}", name, e));
+            assert!(!polylines.is_empty(), "Font '{}' produced 0 polylines", name);
+            for p in &polylines {
+                assert!(p.is_closed, "Font '{}' contours must be closed loops for laser cutting/engraving", name);
+            }
+        }
     }
 }

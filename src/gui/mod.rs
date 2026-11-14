@@ -353,6 +353,8 @@ pub struct LaserBurnApp {
     pub text_on_path_offset: f64,
     pub text_on_path_perpendicular: f64,
     pub text_on_path_reverse: bool,
+    pub text_letter_spacing: f64,
+    pub text_line_spacing: f64,
 
     // Status
     pub status_msg: String,
@@ -579,11 +581,13 @@ impl Default for LaserBurnApp {
             text_input: "Text".to_string(),
             text_font_size: 15.0,
             text_is_singleline: false,
-            text_font_path: crate::text::default_system_font(),
-            text_font_name: "Arial / System".to_string(),
+            text_font_path: "embedded:Caveat".to_string(),
+            text_font_name: "✍ Caveat (Luonnollinen käsiala / Puukaiverrus)".to_string(),
             text_pos_x: 60.0,
             text_pos_y: 60.0,
             text_align: crate::text::TextAlign::Left,
+            text_letter_spacing: 1.0,
+            text_line_spacing: 1.2,
             text_on_path_enabled: false,
             text_on_path_offset: 0.0,
             text_on_path_perpendicular: 0.0,
@@ -3280,8 +3284,8 @@ impl LaserBurnApp {
             x: self.text_pos_x,
             y: self.text_pos_y,
             align: self.text_align,
-            letter_spacing: 1.0,
-            line_spacing: 1.2,
+            letter_spacing: self.text_letter_spacing,
+            line_spacing: self.text_line_spacing,
         };
 
         let polylines_res = if self.text_on_path_enabled {
@@ -7404,7 +7408,7 @@ impl eframe::App for LaserBurnApp {
             let mut close_dialog = false;
             let mut do_add_text = false;
             let mut is_open = true;
-            let (def_pos, def_size) = self.window_pos_size("text_tool_dialog", [180.0, 90.0], [380.0, 420.0]);
+            let (def_pos, def_size) = self.window_pos_size("text_tool_dialog", [180.0, 90.0], [440.0, 560.0]);
 
             let resp = egui::Window::new(tr("Text Tool"))
                 .id(egui::Id::new("text_tool_dialog"))
@@ -7469,6 +7473,68 @@ impl eframe::App for LaserBurnApp {
                     ui.horizontal(|ui| {
                         ui.label("Height (mm):");
                         ui.add(egui::Slider::new(&mut self.text_font_size, 3.0..=120.0).suffix(" mm"));
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Kirjainväli (Tracking):");
+                        ui.add(egui::Slider::new(&mut self.text_letter_spacing, 0.7..=2.5).suffix("x"));
+                        if ui.small_button("1.0x").on_hover_text("Normaali kirjainväli").clicked() {
+                            self.text_letter_spacing = 1.0;
+                        }
+                        if ui.small_button("+15% (Puu)").on_hover_text("Suositeltu puukaiverrukseen ja leikkuulaudoille (1.15x), jotta viivat eivät sulaudu yhteen puunsyiden mukana").clicked() {
+                            self.text_letter_spacing = 1.15;
+                        }
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Riviväli (Line):");
+                        ui.add(egui::Slider::new(&mut self.text_line_spacing, 0.8..=3.0).suffix("x"));
+                        if ui.small_button("1.2x").on_hover_text("Normaali riviväli").clicked() {
+                            self.text_line_spacing = 1.2;
+                        }
+                        if ui.small_button("1.4x (Resepti)").on_hover_text("Väljempi riviväli ainesosalistoille ja ohjeille").clicked() {
+                            self.text_line_spacing = 1.4;
+                        }
+                    });
+
+                    ui.collapsing("💡 Vinkkejä reseptin asetteluun leikkuulaudalle (Puukaiverrus)", |ui| {
+                        ui.label(egui::RichText::new("Puukaiverruksen kultaiset säännöt:").strong().color(egui::Color32::from_rgb(255, 193, 7)));
+                        ui.label("• Yhdistä kaksi fonttia: Otsikossa näyttävä kaunokirjoitus (Satisfy tai Alex Brush) ja reseptissä selkeä käsiala (Caveat, Kalam tai Patrick Hand).");
+                        ui.label("• Säädä kirjainväliä (tracking): Lisää kirjaimille hieman väljyyttä (esim. 1.15x), jotta kaiverrusjälki ei sulaudu yhteen puun syiden mukana.");
+                        ui.label("• Vältä liian pientä tekstiä: Pidä leipätekstin koko vähintään 12–14 mm korkeana, jotta ä- ja ö-pisteet sekä pienet silmukat (e, a) erottuvat selkeästi.");
+
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new("Pika-asetukset yhdellä klikkauksella:").italics());
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button("📌 Otsikko (Satisfy 24mm, 1.10x)").clicked() {
+                                self.text_font_name = "✍ Satisfy (Perinteinen kaunokirjoitus / Otsikot)".to_string();
+                                self.text_font_path = "embedded:Satisfy".to_string();
+                                self.text_font_size = 24.0;
+                                self.text_letter_spacing = 1.10;
+                                self.text_is_singleline = false;
+                            }
+                            if ui.button("📝 Mitat & Ainesosat (Kalam 14mm, 1.15x)").clicked() {
+                                self.text_font_name = "✍ Kalam (Rento käsiala / Ainesosat & Mitat)".to_string();
+                                self.text_font_path = "embedded:Kalam".to_string();
+                                self.text_font_size = 14.0;
+                                self.text_letter_spacing = 1.15;
+                                self.text_is_singleline = false;
+                            }
+                            if ui.button("✍ Käsiala (Caveat 15mm, 1.15x)").clicked() {
+                                self.text_font_name = "✍ Caveat (Luonnollinen käsiala / Puukaiverrus)".to_string();
+                                self.text_font_path = "embedded:Caveat".to_string();
+                                self.text_font_size = 15.0;
+                                self.text_letter_spacing = 1.15;
+                                self.text_is_singleline = false;
+                            }
+                            if ui.button("👵 Reseptiohje (Patrick Hand 13mm, 1.15x)").clicked() {
+                                self.text_font_name = "✍ Patrick Hand (Selkeä tekstaus / Äidin reseptit)".to_string();
+                                self.text_font_path = "embedded:PatrickHand".to_string();
+                                self.text_font_size = 13.0;
+                                self.text_letter_spacing = 1.15;
+                                self.text_is_singleline = false;
+                            }
+                        });
                     });
 
                     ui.horizontal(|ui| {
