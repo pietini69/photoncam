@@ -407,10 +407,17 @@ impl Lbrn2File {
             layer.cut_setting.kerf = get_val_f64(&["kerf", "Kerf"], 0.0);
             layer.cut_setting.line_interval = get_val_f64(&["interval", "Interval", "lineInterval", "LineInterval"], 0.08);
 
+            let is_tool = cut_type.eq_ignore_ascii_case("Tool") || idx >= 30;
+            if is_tool {
+                layer.output = false;
+            }
+
             if cut_type.eq_ignore_ascii_case("Scan") || cut_type.eq_ignore_ascii_case("Scan+Cut") {
                 layer.cut_setting.mode = CutMode::Fill;
             } else if cut_type.eq_ignore_ascii_case("Image") {
                 layer.cut_setting.mode = CutMode::Image;
+            } else if is_tool {
+                layer.cut_setting.mode = CutMode::Line;
             } else {
                 layer.cut_setting.mode = CutMode::Line;
             }
@@ -632,7 +639,7 @@ impl Lbrn2File {
                                 y: min_y,
                                 width: w * cur_xform.a.abs(),
                                 height: h * cur_xform.d.abs(),
-                                corner_radius: cr,
+                                corner_radius: cr * cur_xform.a.abs(),
                             });
                         } else {
                             // Rotated rect -> Polygon
@@ -668,6 +675,91 @@ impl Lbrn2File {
                         });
                     }
                 }
+                "Bitmap" => {
+                    let w = node
+                        .attribute("W")
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                    let h = node
+                        .attribute("H")
+                        .and_then(|s| s.parse::<f64>().ok())
+                        .unwrap_or(0.0);
+                    let brightness = node
+                        .attribute("Brightness")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    let contrast = node
+                        .attribute("Contrast")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(0.0);
+                    let gamma = node
+                        .attribute("Gamma")
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .unwrap_or(1.0);
+                    let image_path = node.attribute("File").map(|s| s.to_string());
+
+                    // In LightBurn, Bitmap local origin (0, 0) is the center (-w/2..w/2, -h/2..h/2)
+                    let hw = w * 0.5;
+                    let hh = h * 0.5;
+                    let p0 = cur_xform.apply(Point2D::new(-hw, -hh));
+                    let p1 = cur_xform.apply(Point2D::new(hw, -hh));
+                    let p2 = cur_xform.apply(Point2D::new(hw, hh));
+                    let p3 = cur_xform.apply(Point2D::new(-hw, hh));
+
+                    let min_x = p0.x.min(p1.x).min(p2.x).min(p3.x);
+                    let min_y = p0.y.min(p1.y).min(p2.y).min(p3.y);
+                    let width_mm = w * cur_xform.a.abs();
+                    let height_mm = h * cur_xform.d.abs();
+
+                    // Decode base64 image data if present
+                    let (raw_pixels, raw_width, raw_height) = if let Some(data_b64) = node.attribute("Data") {
+                        let clean_b64: String = data_b64.chars().filter(|c| !c.is_whitespace()).collect();
+                        use base64::Engine;
+                        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(clean_b64.as_bytes()) {
+                            if let Ok(dyn_img) = image::load_from_memory(&bytes) {
+                                let rgba = dyn_img.to_rgba8();
+                                (Some(rgba.as_raw().to_vec()), rgba.width(), rgba.height())
+                            } else {
+                                (None, 0, 0)
+                            }
+                        } else {
+                            (None, 0, 0)
+                        }
+                    } else if let Some(ref path) = image_path {
+                        if let Ok(dyn_img) = image::open(path) {
+                            let rgba = dyn_img.to_rgba8();
+                            (Some(rgba.as_raw().to_vec()), rgba.width(), rgba.height())
+                        } else {
+                            (None, 0, 0)
+                        }
+                    } else {
+                        (None, 0, 0)
+                    };
+
+                    if width_mm > 0.0 && height_mm > 0.0 {
+                        // Ensure layer has CutMode::Image if not already Scan/Fill
+                        if let Some(l) = doc.layers.get_mut(&cut_index) {
+                            if l.cut_setting.mode == CutMode::Line {
+                                l.cut_setting.mode = CutMode::Image;
+                            }
+                        }
+                        doc.add_shape(Shape::Image {
+                            layer_index: cut_index,
+                            x: min_x,
+                            y: min_y,
+                            width: width_mm,
+                            height: height_mm,
+                            image_path,
+                            raw_pixels,
+                            raw_width,
+                            raw_height,
+                            brightness,
+                            contrast,
+                            gamma,
+                            sharpen: 0.0,
+                        });
+                    }
+                }
                 "Text" => {
                     // 1. First priority: Check if text has <BackupPath> (which contains exact vector curves of characters)
                     let mut loaded_from_backup = false;
@@ -691,11 +783,11 @@ impl Lbrn2File {
                                     Vec::new()
                                 };
 
-                                // In LightBurn, BackupPath XForm is the pre-computed world transform.
                                 let bp_xform = if let Some(xf_node) =
                                     bp_node.children().find(|n| n.has_tag_name("XForm"))
                                 {
-                                    xf_node.text().map(Transform2D::parse).unwrap_or(cur_xform)
+                                    let local_bp = xf_node.text().map(Transform2D::parse).unwrap_or(local_xform);
+                                    parent_xform.multiply(&local_bp)
                                 } else {
                                     cur_xform
                                 };
@@ -1051,7 +1143,46 @@ impl Lbrn2File {
                 out.push_str(&format!("{}    </Children>\n", pad));
                 out.push_str(&format!("{}</Shape>\n", pad));
             }
-            Shape::Image { .. } => {}
+            Shape::Image {
+                layer_index,
+                x,
+                y,
+                width,
+                height,
+                image_path,
+                raw_pixels,
+                raw_width,
+                raw_height,
+                brightness,
+                contrast,
+                gamma,
+                ..
+            } => {
+                let center_x = x + width * 0.5;
+                let center_y = y + height * 0.5;
+                out.push_str(&format!(
+                    "{}<Shape Type=\"Bitmap\" CutIndex=\"{}\" W=\"{:.4}\" H=\"{:.4}\" Brightness=\"{:.2}\" Contrast=\"{:.2}\" Gamma=\"{:.2}\"",
+                    pad, layer_index, width, height, brightness, contrast, gamma
+                ));
+                if let Some(ref p) = image_path {
+                    out.push_str(&format!(" File=\"{}\"", p));
+                }
+                if let Some(ref pixels) = raw_pixels {
+                    if *raw_width > 0 && *raw_height > 0 {
+                        let mut png_bytes = Vec::new();
+                        let encoder = image::codecs::png::PngEncoder::new(&mut png_bytes);
+                        use image::ImageEncoder;
+                        if encoder.write_image(pixels, *raw_width, *raw_height, image::ExtendedColorType::Rgba8).is_ok() {
+                            use base64::Engine;
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
+                            out.push_str(&format!(" Data=\"{}\"", b64));
+                        }
+                    }
+                }
+                out.push_str(">\n");
+                out.push_str(&format!("{}    <XForm>1 0 0 1 {:.4} {:.4}</XForm>\n", pad, center_x, center_y));
+                out.push_str(&format!("{}</Shape>\n", pad));
+            }
         }
     }
 }
@@ -1249,5 +1380,31 @@ mod tests {
         let b = doc.bounds();
         assert!(b.width() > 5.0 && b.width() < 50.0);
         assert!(b.height() > 5.0 && b.height() < 30.0);
+    }
+
+    #[test]
+    fn test_load_testob_bitmap_and_layers() {
+        let path = "/tmp/testOB/testOB.lbrn2";
+        if std::path::Path::new(path).exists() {
+            let doc = Lbrn2File::load_from_file(path).expect("Should load testOB.lbrn2");
+            assert_eq!(doc.shapes.len(), 953, "Should contain 953 shapes (including Image)");
+            
+            // Verify Shape::Image exists and is decoded
+            let img_shape = doc.shapes.iter().find(|s| matches!(s, Shape::Image { .. }));
+            assert!(img_shape.is_some(), "Document must contain Shape::Image");
+            
+            if let Some(Shape::Image { width, height, raw_pixels, raw_width, raw_height, .. }) = img_shape {
+                assert!(*width > 150.0 && *width < 180.0, "Width should be ~168mm, got {}", width);
+                assert!(*height > 100.0 && *height < 120.0, "Height should be ~112mm, got {}", height);
+                assert_eq!(*raw_width, 1536);
+                assert_eq!(*raw_height, 1024);
+                assert!(raw_pixels.is_some());
+                assert_eq!(raw_pixels.as_ref().unwrap().len(), 1536 * 1024 * 4);
+            }
+
+            // Verify Tool Layer 30 is non-output
+            let layer30 = doc.layers.get(&30).expect("Layer 30 should exist");
+            assert!(!layer30.output, "Tool layer 30 should have output disabled");
+        }
     }
 }

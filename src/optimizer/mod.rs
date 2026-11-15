@@ -70,7 +70,7 @@ impl CutOptimizer {
 
             let layer_cut_setting = doc.layers.get(&layer_idx).map(|l| &l.cut_setting);
             let paths: Vec<OptimizedPath> = if let Some(cs) = layer_cut_setting {
-                if cs.mode == crate::document::CutMode::Image {
+                if matches!(shape, crate::document::Shape::Image { .. }) || cs.mode == crate::document::CutMode::Image {
                     if cs.dither_mode == crate::document::DitherMode::Sliced3D {
                         shape.to_3d_relief_paths(cs).into_iter().map(|(poly, powers, z)| {
                             OptimizedPath {
