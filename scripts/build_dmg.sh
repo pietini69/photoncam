@@ -60,10 +60,9 @@ package_target() {
     (cd "$DIST_DIR" && zip -r "$zip_path" "PhotonCAM_Beta_${target_name}.app")
 
     if [[ "$target_name" == "universal" || "$target_name" == "arm64" ]]; then
-        echo "==> Installing latest build into /Applications/PhotonCAM Beta.app and /Applications/PhotonCAM.app..."
-        rm -rf "/Applications/PhotonCAM Beta.app" "/Applications/PhotonCAM.app"
+        echo "==> Installing latest build into /Applications/PhotonCAM Beta.app..."
+        rm -rf "/Applications/PhotonCAM Beta.app"
         cp -R "$app_dir" "/Applications/PhotonCAM Beta.app"
-        cp -R "$app_dir" "/Applications/PhotonCAM.app"
     fi
 
     rm -rf "$dmg_root" "$app_dir"
